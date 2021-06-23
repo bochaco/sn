@@ -53,15 +53,6 @@ use std::{
 };
 use xor_name::XorName;
 
-/// Public key and signature provided by the client
-#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
-pub struct ClientSig {
-    /// Client public key.
-    pub public_key: PublicKey,
-    /// Client signature.
-    pub signature: Signature,
-}
-
 /// Message envelope containing a Safe message payload,
 /// This struct also provides utilities to obtain the serialized bytes
 /// ready to send them over the wire.
@@ -243,8 +234,6 @@ pub enum ProcessMsg {
         id: MessageId,
         /// Cmd.
         cmd: Cmd,
-        /// Public key and corresponding signature over the command
-        client_sig: ClientSig,
     },
     /// Queries is a read-only operation.
     Query {
@@ -252,8 +241,6 @@ pub enum ProcessMsg {
         id: MessageId,
         /// Query.
         query: Query,
-        /// Public key and corresponding signature over the query
-        client_sig: ClientSig,
     },
     /// An Event is a fact about something that happened.
     Event {
@@ -504,7 +491,10 @@ try_from!(ActorHistory, GetHistory);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ChunkAddress, DataAddress, Keypair, PublicChunk, UnseqMap};
+    use crate::{
+        messaging::ClientSigned,
+        types::{ChunkAddress, DataAddress, Keypair, PublicChunk, UnseqMap},
+    };
     use anyhow::{anyhow, Result};
     use std::convert::{TryFrom, TryInto};
 
@@ -541,15 +531,10 @@ mod tests {
     fn generate_processing_error() -> Result<()> {
         if let Some(keypair) = gen_keypairs().first() {
             let public_key = keypair.public_key();
-            let signature = keypair.sign(b"the query");
 
             let msg = ProcessMsg::Query {
                 id: MessageId::new(),
                 query: Query::Transfer(TransferQuery::GetBalance(public_key)),
-                client_sig: ClientSig {
-                    public_key,
-                    signature,
-                },
             };
             let random_addr = DataAddress::Chunk(ChunkAddress::Public(XorName::random()));
             let lazy_error =
@@ -571,7 +556,6 @@ mod tests {
     fn debug_format_processing_error() -> Result<()> {
         if let Some(keypair) = gen_keypairs().first() {
             let public_key = keypair.public_key();
-            let signature = keypair.sign(b"the query");
 
             let random_addr = DataAddress::Chunk(ChunkAddress::Public(XorName::random()));
             let errored_response = ProcessingError {
@@ -579,10 +563,6 @@ mod tests {
                 source_message: Some(ProcessMsg::Query {
                     id: MessageId::new(),
                     query: Query::Transfer(TransferQuery::GetBalance(public_key)),
-                    client_sig: ClientSig {
-                        public_key,
-                        signature,
-                    },
                 }),
                 id: MessageId::new(),
             };
@@ -645,16 +625,11 @@ mod tests {
     fn serialization() -> Result<()> {
         let keypair = &gen_keypairs()[0];
         let public_key = keypair.public_key();
-        let signature = keypair.sign(b"the query");
 
         let id = MessageId::new();
         let message = ClientMsg::Process(ProcessMsg::Query {
             id,
             query: Query::Transfer(TransferQuery::GetBalance(public_key)),
-            client_sig: ClientSig {
-                public_key,
-                signature,
-            },
         });
 
         // test msgpack serialization

@@ -8,13 +8,12 @@
 
 // FIXME: change NodeCmd defnintions to return Result and
 // Error defined for the crate::node instead of client Result/Error
-use crate::messaging::client::{CmdError, Error, Result};
 use crate::messaging::{
     client::{
-        ChunkRead, ChunkWrite, ClientSig, DataCmd as NodeDataCmd, DataExchange,
-        DataQuery as NodeDataQuery,
+        ChunkRead, ChunkWrite, CmdError, DataCmd as NodeDataCmd, DataExchange,
+        DataQuery as NodeDataQuery, Error, Result,
     },
-    EndUser, MessageId, MessageType, WireMsg,
+    ClientSigned, EndUser, MessageId, MessageType, WireMsg,
 };
 use crate::types::{
     ActorHistory, Chunk, ChunkAddress, CreditAgreementProof, NodeAge, PublicKey, ReplicaEvent,
@@ -135,7 +134,7 @@ pub enum NodeCmd {
         /// The contianed command
         cmd: NodeDataCmd,
         /// Client pk and signature
-        client_sig: ClientSig,
+        client_sig: ClientSigned,
         /// Message source
         origin: EndUser,
     },
@@ -144,7 +143,7 @@ pub enum NodeCmd {
         /// The contianed command
         cmd: ChunkWrite,
         /// Client pk and signature
-        client_sig: ClientSig,
+        client_sig: ClientSigned,
         /// Message source
         origin: EndUser,
     },
@@ -223,7 +222,7 @@ pub enum NodeQuery {
         /// The actual query message
         query: NodeDataQuery,
         /// Client signature
-        client_sig: ClientSig,
+        client_sig: ClientSigned,
         /// The user that has initiated this query
         origin: EndUser,
     },
