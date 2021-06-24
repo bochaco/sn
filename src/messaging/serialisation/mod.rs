@@ -6,7 +6,6 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
-/// WireMsg Header
 mod wire_msg_header;
 
 pub use self::wire_msg_header::MsgEnvelope;
@@ -175,38 +174,6 @@ impl WireMsg {
     pub fn deserialize(bytes: Bytes) -> Result<MessageType> {
         Self::from(bytes)?.to_message()
     }
-    /*
-        /// Convenience function which creates a temporary WireMsg from the provided
-        /// MsgEnvelope, returning the serialized WireMsg.
-        pub fn serialize_section_info_msg(
-            query: &section_info::SectionInfoMsg,
-            dst: XorName,
-            dst_section_pk: PublicKey,
-        ) -> Result<Bytes> {
-            Self::new_section_info_msg(query, dst, dst_section_pk)?.serialize()
-        }
-
-        /// Convenience function which creates a temporary WireMsg from the provided
-        /// Message, returning the serialized WireMsg.
-        pub fn serialize_client_msg(
-            msg: &client::ClientMsg,
-            dst: XorName,
-            dst_section_pk: PublicKey,
-        ) -> Result<Bytes> {
-            Self::new_client_msg(msg, dst, dst_section_pk)?.serialize()
-        }
-
-        /// Convenience function which creates a temporary WireMsg from the provided
-        /// node::Node, returning the serialized WireMsg.
-        pub fn serialize_node_msg(
-            msg: &node::NodeMsg,
-            dst: XorName,
-            dst_section_pk: PublicKey,
-            src_section_pk: Option<PublicKey>,
-        ) -> Result<Bytes> {
-            Self::new_node_msg(msg, dst, dst_section_pk, src_section_pk)?.serialize()
-        }
-    */
 
     /// Update dst_location in the WireMsg
     pub fn update_dst_location(&mut self, dst_location: DstLocation) {
@@ -309,7 +276,7 @@ mod tests {
 
     #[test]
     fn serialisation_node_msg() -> Result<()> {
-        use crate::messaging::{MessageId, NodeSigned};
+        use crate::messaging::{Aggregation, MessageId, NodeSigned};
         use ed25519_dalek::Signer;
         use node::{NodeCmd, NodeMsg, NodeSystemCmd};
         use rand::rngs::OsRng;
@@ -327,9 +294,12 @@ mod tests {
 
         let msg_id = MessageId::new();
 
-        let node_msg = NodeMsg::NodeCmd {
-            cmd: NodeCmd::System(NodeSystemCmd::RegisterWallet(dst_section_pk.into())),
+        let node_msg = NodeMsg {
             id: msg_id,
+            aggregation: Aggregation::AtDestination,
+            variant: Variant::NodeCmd(NodeCmd::System(NodeSystemCmd::RegisterWallet(
+                dst_section_pk.into(),
+            ))),
         };
 
         let payload = WireMsg::serialize_msg_payload(&node_msg)?;
