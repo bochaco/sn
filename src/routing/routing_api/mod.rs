@@ -24,12 +24,12 @@ use self::{
 use crate::messaging::{
     node::Peer, DstLocation, EndUser, Itinerary, MessageType, SectionAuthorityProvider, WireMsg,
 };
-use crate::routing::core::{join_network, Core};
 use crate::routing::{
+    core::{join_network, Core},
     ed25519,
     error::Result,
     event::{Elders, Event, NodeElderChange},
-    messages::RoutingMsgUtils,
+    messages::WireMsgUtils,
     network::NetworkUtils,
     node::Node,
     peer::PeerUtils,
@@ -46,7 +46,6 @@ use std::{
     net::SocketAddr,
     sync::Arc,
 };
-
 use tokio::{sync::mpsc, task};
 use xor_name::{Prefix, XorName};
 
@@ -476,6 +475,7 @@ async fn handle_message(dispatcher: Arc<Dispatcher>, bytes: Bytes, sender: Socke
             return;
         }
     };
+
     let span = {
         let mut state = dispatcher.core.write().await;
 
@@ -491,6 +491,15 @@ async fn handle_message(dispatcher: Arc<Dispatcher>, bytes: Bytes, sender: Socke
     };
     let _span_guard = span.enter();
 
+    if let Err(err) = wire_msg.check_signature() {
+        error!(
+            "Discarding message received ({:?}) due to invalid signature: {:?}",
+            wire_msg.msg_id(),
+            err
+        );
+        return;
+    }
+
     let message_type = match wire_msg.to_message() {
         Ok(message_type) => message_type,
         Err(error) => {
@@ -504,7 +513,7 @@ async fn handle_message(dispatcher: Arc<Dispatcher>, bytes: Bytes, sender: Socke
     };
 
     match message_type {
-        MessageType::SectionInfo { msg, dst_info } => {
+        MessageType::SectionInfo { msg_envelope, msg } => {
             let command = Command::HandleSectionInfoMsg {
                 sender,
                 message: msg,
@@ -512,15 +521,7 @@ async fn handle_message(dispatcher: Arc<Dispatcher>, bytes: Bytes, sender: Socke
             };
             let _ = task::spawn(dispatcher.handle_commands(command));
         }
-        MessageType::Routing { msg, dst_info } => {
-            if let Err(err) = msg.check_signature() {
-                error!(
-                    "Discarding message received ({:?}) due to invalid signature: {:?}",
-                    msg.id, err
-                );
-                return;
-            }
-
+        MessageType::Node { msg_envelope, msg } => {
             let command = Command::HandleMessage {
                 message: msg,
                 sender: Some(sender),
@@ -528,12 +529,7 @@ async fn handle_message(dispatcher: Arc<Dispatcher>, bytes: Bytes, sender: Socke
             };
             let _ = task::spawn(dispatcher.handle_commands(command));
         }
-        MessageType::Node {
-            msg: _,
-            dst_info: _,
-            src_section_pk: _,
-        } => unimplemented!(),
-        MessageType::Client { msg, .. } => {
+        MessageType::Client { msg_envelope, msg } => {
             let end_user = dispatcher
                 .core
                 .read()

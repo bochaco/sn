@@ -21,14 +21,14 @@ mod user_msg;
 use super::Core;
 use crate::messaging::{
     node::{
-        Error as AggregatorError, JoinResponse, Proposal, RoutingMsg, SignedRelocateDetails,
+        Error as AggregatorError, JoinResponse, NodeMsg, Proposal, SignedRelocateDetails,
         SrcAuthority, Variant,
     },
     DstInfo, DstLocation,
 };
 use crate::routing::{
     error::{Error, Result},
-    messages::{RoutingMsgUtils, SrcAuthorityUtils},
+    messages::{MsgAuthorityUtils, WireMsgUtils},
     network::NetworkUtils,
     relocation::{RelocateState, SignedRelocateDetailsUtils},
     routing_api::command::Command,
@@ -43,7 +43,7 @@ impl Core {
     pub(crate) async fn handle_message(
         &mut self,
         sender: Option<SocketAddr>,
-        routing_msg: RoutingMsg,
+        routing_msg: NodeMsg,
         dst_info: DstInfo,
     ) -> Result<Vec<Command>> {
         let mut commands = vec![];
@@ -60,7 +60,7 @@ impl Core {
                 commands.push(cmds);
             }
 
-            // RoutingMsg not for us.
+            // NodeMsg not for us.
             return Ok(commands);
         }
 
@@ -135,7 +135,7 @@ impl Core {
     pub(crate) async fn handle_useful_message(
         &mut self,
         sender: Option<SocketAddr>,
-        routing_msg: RoutingMsg,
+        routing_msg: NodeMsg,
         dst_info: DstInfo,
         known_keys: &[BlsPublicKey],
     ) -> Result<Vec<Command>> {
@@ -359,7 +359,7 @@ impl Core {
         }
     }
 
-    fn aggregate_message(&mut self, msg: RoutingMsg) -> Result<Option<RoutingMsg>> {
+    fn aggregate_message(&mut self, msg: NodeMsg) -> Result<Option<NodeMsg>> {
         let sig_share = if let SrcAuthority::BlsShare { sig_share, .. } = &msg.src {
             sig_share
         } else {

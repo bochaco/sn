@@ -32,7 +32,7 @@ pub enum NodeCmd {
         /// The contianed command
         cmd: NodeDataCmd,
         /// Client pk and signature
-        client_sig: ClientSigned,
+        client_signed: ClientSigned,
         /// Message source
         origin: EndUser,
     },
@@ -41,7 +41,7 @@ pub enum NodeCmd {
         /// The contianed command
         cmd: ChunkWrite,
         /// Client pk and signature
-        client_sig: ClientSigned,
+        client_signed: ClientSigned,
         /// Message source
         origin: EndUser,
     },

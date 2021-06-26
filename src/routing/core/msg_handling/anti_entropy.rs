@@ -8,12 +8,12 @@
 
 use super::Core;
 use crate::messaging::{
-    node::{RoutingMsg, Section, Variant},
+    node::{NodeMsg, Section, Variant},
     DstInfo,
 };
 use crate::routing::{
     error::Result,
-    messages::{RoutingMsgUtils, SrcAuthorityUtils},
+    messages::{MsgAuthorityUtils, WireMsgUtils},
     node::Node,
     routing_api::command::Command,
     section::{SectionAuthorityProviderUtils, SectionUtils},
@@ -23,7 +23,7 @@ use std::cmp::Ordering;
 impl Core {
     pub async fn check_for_entropy(
         &self,
-        msg: &RoutingMsg,
+        msg: &NodeMsg,
         dst_info: DstInfo,
     ) -> Result<(Option<Command>, bool)> {
         if self.is_not_elder() {
@@ -44,14 +44,14 @@ impl Core {
 
 // On reception of an incoming message, determine the msg to send in order to
 // bring our's and the sender's knowledge about each other up to date. Returns a tuple of
-// `RoutingMsg` and `bool`. The boolean signals if the incoming message shall still be processed.
+// `NodeMsg` and `bool`. The boolean signals if the incoming message shall still be processed.
 // If entropy is found, we do not process the incoming message by returning `false`.
 fn process(
     node: &Node,
     section: &Section,
-    msg: &RoutingMsg,
+    msg: &NodeMsg,
     dst_info: DstInfo,
-) -> Result<(Option<RoutingMsg>, bool)> {
+) -> Result<(Option<NodeMsg>, bool)> {
     let src_name = msg.src.name();
     if section.prefix().matches(&src_name) {
         // This message is from our section. We update our members via the `Sync` message which is
@@ -89,7 +89,7 @@ fn process(
             src_info: (section_auth.clone(), chain),
             msg: Some(Box::new(msg.clone())),
         };
-        let msg = RoutingMsg::single_src(
+        let msg = NodeMsg::single_src(
             node,
             dst,
             variant,
@@ -236,13 +236,13 @@ mod tests {
             &self,
             src_section: &Prefix,
             section_pk: bls::PublicKey,
-        ) -> Result<RoutingMsg> {
+        ) -> Result<NodeMsg> {
             let sender = Node::new(
                 ed25519::gen_keypair(&src_section.range_inclusive(), MIN_ADULT_AGE),
                 gen_addr(),
             );
 
-            Ok(RoutingMsg::single_src(
+            Ok(NodeMsg::single_src(
                 &sender,
                 DstLocation::Section(self.node.name()),
                 Variant::UserMessage(b"hello".to_vec()),
