@@ -148,15 +148,8 @@ impl Routing {
         info!("{} Bootstrapped!", node_name);
 
         // Process message backlog
-        for (message, sender, dst_info) in backlog {
-            dispatcher
-                .clone()
-                .handle_commands(Command::HandleMessage {
-                    message,
-                    sender: Some(sender),
-                    dst_info,
-                })
-                .await?;
+        for cmd in backlog {
+            dispatcher.clone().handle_commands(cmd).await?;
         }
 
         // Start listening to incoming connections.
@@ -354,24 +347,23 @@ impl Routing {
     /// key than the whole message is so that the recipient can verify such key.
     pub async fn send_message(
         &self,
-        itinerary: Itinerary,
-        content: MessageType,
+        wire_msg: WireMsg,
         additional_proof_chain_key: Option<bls::PublicKey>,
     ) -> Result<()> {
-        if let DstLocation::EndUser(EndUser { socket_id, xorname }) = itinerary.dst {
+        if let DstLocation::EndUser(EndUser { socket_id, xorname }) = wire_msg.dst_location() {
             if self.our_prefix().await.matches(&xorname) {
                 let addr = self
                     .dispatcher
                     .core
                     .read()
                     .await
-                    .get_socket_addr(socket_id)
+                    .get_socket_addr(*socket_id)
                     .copied();
 
                 if let Some(socket_addr) = addr {
                     debug!("Sending client msg to {:?}", socket_addr);
                     return self
-                        .send_message_to_client(socket_addr, xorname, content)
+                        .send_message_to_client(socket_addr, *xorname, wire_msg)
                         .await;
                 } else {
                     debug!(
@@ -386,8 +378,7 @@ impl Routing {
         }
 
         let command = Command::SendUserMessage {
-            itinerary,
-            content,
+            wire_msg,
             additional_proof_chain_key,
         };
         self.dispatcher.clone().handle_commands(command).await
@@ -398,21 +389,24 @@ impl Routing {
     /// routing library.
     async fn send_message_to_client(
         &self,
-        recipient: SocketAddr,
+        recipient_addr: SocketAddr,
         user_xorname: XorName,
-        mut message: MessageType,
+        mut wire_msg: WireMsg,
     ) -> Result<()> {
+        unimplemented!();
+        /*
         message.update_dst_info(
             Some(*self.section_chain().await.last_key()),
             Some(user_xorname),
         );
 
         let command = Command::SendMessage {
-            recipients: vec![(user_xorname, recipient)],
+            recipients: vec![(user_xorname, recipient_addr)],
             delivery_group_size: 1,
-            message,
+            wire_msg,
         };
         self.dispatcher.clone().handle_commands(command).await
+        */
     }
 
     /// Returns the current BLS public key set if this node has one, or
@@ -513,23 +507,37 @@ async fn handle_message(dispatcher: Arc<Dispatcher>, bytes: Bytes, sender: Socke
     };
 
     match message_type {
-        MessageType::SectionInfo { msg_envelope, msg } => {
+        MessageType::SectionInfo {
+            msg_id,
+            dst_location,
+            msg,
+        } => {
             let command = Command::HandleSectionInfoMsg {
                 sender,
-                message: msg,
-                dst_info,
+                msg_id,
+                dst_location,
+                msg,
             };
             let _ = task::spawn(dispatcher.handle_commands(command));
         }
-        MessageType::Node { msg_envelope, msg } => {
+        MessageType::Node {
+            msg_id,
+            msg_authority,
+            dst_location,
+            msg,
+        } => {
             let command = Command::HandleMessage {
-                message: msg,
                 sender: Some(sender),
-                dst_info,
+                msg_id,
+                msg_authority,
+                dst_location,
+                msg,
             };
             let _ = task::spawn(dispatcher.handle_commands(command));
         }
-        MessageType::Client { msg_envelope, msg } => {
+        MessageType::Client {
+            client_signed, msg, ..
+        } => {
             let end_user = dispatcher
                 .core
                 .read()
@@ -546,7 +554,7 @@ async fn handle_message(dispatcher: Arc<Dispatcher>, bytes: Bytes, sender: Socke
                     end_user
                 }
                 None => {
-                    // this is the first time we receive a message from this client
+                    // This is the first time we receive a message from this client
                     debug!("First message from client {}, creating a socket id", sender);
 
                     // TODO: remove the enduser registry and simply encrypt socket addr with
@@ -566,6 +574,7 @@ async fn handle_message(dispatcher: Arc<Dispatcher>, bytes: Bytes, sender: Socke
 
             let event = Event::ClientMsgReceived {
                 msg: Box::new(msg),
+                client_signed,
                 user: end_user,
             };
 

@@ -8,13 +8,11 @@
 
 mod errors;
 
-use crate::messaging::{MessageId, MessageType, SectionAuthorityProvider, WireMsg};
+use crate::messaging::{DstLocation, MessageId, MessageType, SectionAuthorityProvider, WireMsg};
 use crate::types::PublicKey;
-use bls::PublicKey as BlsPublicKey;
 use bytes::Bytes;
 pub use errors::Error;
 use serde::{Deserialize, Serialize};
-use xor_name::XorName;
 
 /// Messages for exchanging network info, specifically on a target section for a msg.
 #[allow(clippy::large_enum_variant)]
@@ -64,13 +62,8 @@ impl SectionInfoMsg {
         }
     }
 
-    /// serialize this Query into bytes ready to be sent over the wire.
-    pub fn serialize(
-        &self,
-        dst: XorName,
-        dst_section_pk: BlsPublicKey,
-    ) -> crate::messaging::Result<Bytes> {
-        unimplemented!();
-        //WireMsg::serialize_section_info_msg(self, dst, dst_section_pk)
+    /// Serialize this Query into bytes ready to be sent over the wire.
+    pub fn serialize(&self, dst_location: DstLocation) -> crate::messaging::Result<Bytes> {
+        WireMsg::new_section_info_msg(self, dst_location)?.serialize()
     }
 }

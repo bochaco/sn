@@ -11,14 +11,12 @@ use crate::messaging::{
         ChunkRead, ChunkWrite, CmdError, DataCmd as NodeDataCmd, DataExchange,
         DataQuery as NodeDataQuery, Error, Result,
     },
-    ClientSigned, EndUser, MessageId, MessageType, WireMsg,
+    ClientSigned, EndUser,
 };
 use crate::types::{
     ActorHistory, Chunk, ChunkAddress, CreditAgreementProof, NodeAge, PublicKey, ReplicaEvent,
     SectionElders, Signature,
 };
-use bls::PublicKey as BlsPublicKey;
-use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use xor_name::XorName;
