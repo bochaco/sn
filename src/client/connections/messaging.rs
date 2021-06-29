@@ -9,10 +9,11 @@
 use super::{QueryResult, Session};
 use crate::client::Error;
 use crate::messaging::{
-    client::{ChunkRead, ClientMsg, ClientSig, Cmd, DataQuery, ProcessMsg, Query, QueryResponse},
+    client::{ChunkRead, ClientMsg, Cmd, DataQuery, ProcessMsg, Query, QueryResponse},
     section_info::SectionInfoMsg,
-    MessageId,
+    ClientSigned, MessageId, WireMsg,
 };
+use crate::messaging::{DstLocation, MsgKind};
 use crate::types::{Chunk, PrivateChunk, PublicChunk, PublicKey, TransferValidated};
 use futures::{future::join_all, stream::FuturesUnordered, StreamExt};
 use itertools::Itertools;
@@ -111,10 +112,12 @@ impl Session {
     }
 
     /// Send a `ClientMsg` to the network without awaiting for a response.
+    // TODO: `client_signed` will be generated from serialized `cmd`, so this should take a
+    // pre-serialized payload.
     pub async fn send_cmd(
         &self,
         cmd: Cmd,
-        client_sig: ClientSig,
+        client_signed: ClientSigned,
         send_to_specific_elder: Option<SocketAddr>,
     ) -> Result<(), Error> {
         let msg_id = MessageId::new();
@@ -150,15 +153,18 @@ impl Session {
             .await?
             .bls()
             .ok_or(Error::NoBlsSectionKey)?;
-        let dst_section_name = XorName::from(client_sig.public_key);
+        let dst_section_name = XorName::from(client_signed.public_key);
 
-        let msg = ClientMsg::Process(ProcessMsg::Cmd {
-            id: msg_id,
-            cmd,
-            client_sig,
-        });
+        let msg = ClientMsg::Process(ProcessMsg::Cmd { id: msg_id, cmd });
+        let payload = WireMsg::serialize_msg_payload(&msg)?;
+        let msg_kind = MsgKind::ClientMsg(client_signed);
+        let dst_location = DstLocation::Section {
+            name: dst_section_name,
+            section_pk,
+        };
+        let wire_msg = WireMsg::new_msg(msg_id, payload, msg_kind, dst_location)?;
 
-        let msg_bytes = msg.serialize(dst_section_name, section_pk)?;
+        let msg_bytes = wire_msg.serialize()?;
 
         // Send message to all Elders concurrently
         let mut tasks = Vec::default();
@@ -196,10 +202,12 @@ impl Session {
     }
 
     /// Send a transfer validation message to all Elder without awaiting for a response.
+    // TODO: `client_signed` will be generated from serialized `cmd`, so this should take a
+    // pre-serialized payload.
     pub async fn send_transfer_validation(
         &self,
         cmd: Cmd,
-        client_sig: ClientSig,
+        client_signed: ClientSigned,
         sender: Sender<Result<TransferValidated, Error>>,
     ) -> Result<MessageId, Error> {
         let msg_id = MessageId::new();
@@ -216,14 +224,18 @@ impl Session {
             .await?
             .bls()
             .ok_or(Error::NoBlsSectionKey)?;
-        let dst_section_name = XorName::from(client_sig.public_key);
+        let dst_section_name = XorName::from(client_signed.public_key);
 
-        let msg = ClientMsg::Process(ProcessMsg::Cmd {
-            id: msg_id,
-            cmd,
-            client_sig,
-        });
-        let msg_bytes = msg.serialize(dst_section_name, section_pk)?;
+        let msg = ClientMsg::Process(ProcessMsg::Cmd { id: msg_id, cmd });
+        let payload = WireMsg::serialize_msg_payload(&msg)?;
+        let msg_kind = MsgKind::ClientMsg(client_signed);
+        let dst_location = DstLocation::Section {
+            name: dst_section_name,
+            section_pk,
+        };
+        let wire_msg = WireMsg::new_msg(msg_id, payload, msg_kind, dst_location)?;
+
+        let msg_bytes = wire_msg.serialize()?;
 
         let _ = pending_transfers.write().await.insert(msg_id, sender);
 
@@ -253,10 +265,12 @@ impl Session {
     }
 
     /// Send a Query `ClientMsg` to the network awaiting for the response.
+    // TODO: `client_signed` will be generated from serialized `query`, so this should take a
+    // pre-serialized payload.
     pub(crate) async fn send_query(
         &self,
         query: Query,
-        client_sig: ClientSig,
+        client_signed: ClientSigned,
     ) -> Result<QueryResult, Error> {
         let data_name = query.dst_address();
 
@@ -274,16 +288,19 @@ impl Session {
             .await?
             .bls()
             .ok_or(Error::NoBlsSectionKey)?;
-        let dst_section_name = XorName::from(client_sig.public_key);
+        let dst_section_name = XorName::from(client_signed.public_key);
 
         let msg_id = MessageId::new();
-        let msg = ClientMsg::Process(ProcessMsg::Query {
-            id: msg_id,
-            query,
-            client_sig,
-        });
+        let msg = ClientMsg::Process(ProcessMsg::Query { id: msg_id, query });
+        let payload = WireMsg::serialize_msg_payload(&msg)?;
+        let msg_kind = MsgKind::ClientMsg(client_signed);
+        let dst_location = DstLocation::Section {
+            name: dst_section_name,
+            section_pk,
+        };
+        let wire_msg = WireMsg::new_msg(msg_id, payload, msg_kind, dst_location)?;
 
-        let msg_bytes = msg.serialize(dst_section_name, section_pk)?;
+        let msg_bytes = wire_msg.serialize()?;
 
         // We select the NUM_OF_ELDERS_SUBSET_FOR_QUERIES closest
         // connected Elders to the data we are querying
@@ -488,11 +505,19 @@ impl Session {
         // FIXME: we don't know our section PK. We must supply a pk for now we do a random one...
         let random_section_pk = bls::SecretKey::random().public_key();
 
-        let msg = SectionInfoMsg::GetSectionQuery(client_pk)
-            .serialize(dst_section_name, random_section_pk)?;
+        let msg_id = MessageId::new();
+        let payload = WireMsg::serialize_msg_payload(&SectionInfoMsg::GetSectionQuery(client_pk))?;
+        let msg_kind = MsgKind::SectionInfoMsg;
+        let dst_location = DstLocation::Section {
+            name: dst_section_name,
+            section_pk: random_section_pk,
+        };
+        let wire_msg = WireMsg::new_msg(msg_id, payload, msg_kind, dst_location)?;
+
+        let msg_bytes = wire_msg.serialize()?;
 
         self.endpoint()?
-            .send_message(msg, bootstrapped_peer)
+            .send_message(msg_bytes, bootstrapped_peer)
             .await?;
 
         Ok(())

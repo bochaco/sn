@@ -14,8 +14,9 @@ mod simulated_payouts;
 mod write_apis;
 
 use crate::client::{Client, Error};
-use crate::messaging::client::{
-    ClientSig, Cmd, DataCmd, Query, QueryResponse, TransferCmd, TransferQuery,
+use crate::messaging::{
+    client::{Cmd, DataCmd, Query, QueryResponse, TransferCmd, TransferQuery},
+    ClientSigned,
 };
 use crate::transfers::{ActorEvent, TransferInitiated};
 use crate::types::{
@@ -249,7 +250,7 @@ impl Client {
 
         let client_pk = self.public_key();
         let signature = self.keypair.sign(b"TODO");
-        let client_sig = ClientSig {
+        let client_sig = ClientSigned {
             public_key: client_pk,
             signature,
         };
