@@ -9,13 +9,11 @@ export RUST_BACKTRACE=full
 
 cargo run --package sn_cli --release -- keys create --for-cli || ((exit++))
 cargo test --release --test cli_node || ((exit++))
-cargo test --release --test cli_cat -- --test-threads=1 || ((exit++))
-cargo test --release --test cli_dog -- --test-threads=1 || ((exit++))
-cargo test --release --test cli_files -- --test-threads=1 || ((exit++))
-cargo test --release --test cli_files_get -- --test-threads=1 || ((exit++))
+cargo test --release --test cli_cat || ((exit++))
+cargo test --release --test cli_dog || ((exit++))
+cargo test --release --test cli_files || ((exit++))
+cargo test --release --test cli_files_get || ((exit++))
 cargo test --release --test cli_keys || ((exit++))
-# TODO: we run NRS tests single threaded since Safe doesn't support
-# concurrent reads to config file.
-cargo test --release --test cli_nrs -- --test-threads=1 || ((exit++))
+cargo test --release --test cli_nrs || ((exit++))
 
 exit $exit

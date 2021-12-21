@@ -8,14 +8,15 @@
 // Software.
 
 use color_eyre::{eyre::bail, eyre::eyre, eyre::WrapErr, Help, Report, Result};
+use fd_lock::RwLock;
 use prettytable::Table;
 use serde::{Deserialize, Serialize};
 use sn_api::{NodeConfig, PublicKey};
+use std::io::prelude::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     default::Default,
-    fmt,
-    fs::{self, remove_file},
+    fmt, fs,
     net::SocketAddr,
     path::{Path, PathBuf},
     thread,
@@ -117,34 +118,36 @@ impl Config {
     pub fn new(cli_config_path: PathBuf, node_config_path: PathBuf) -> Result<Config> {
         let mut pb = cli_config_path.clone();
         pb.pop();
-        std::fs::create_dir_all(pb.as_path())?;
+        fs::create_dir_all(pb.as_path())?;
 
-        let settings: Settings;
-        if cli_config_path.exists() {
+        let settings = if cli_config_path.exists() {
             let file = fs::File::open(&cli_config_path).wrap_err_with(|| {
                 format!(
                     "Error opening config file from '{}'",
                     cli_config_path.display(),
                 )
             })?;
-            settings = serde_json::from_reader(file).wrap_err_with(|| {
+
+            let settings = serde_json::from_reader(file).wrap_err_with(|| {
                 format!(
                     "Format of the config file at '{}' is not valid and couldn't be parsed",
                     cli_config_path.display()
                 )
             })?;
+
             debug!(
                 "Config settings retrieved from '{}': {:?}",
                 cli_config_path.display(),
                 settings
             );
+            settings
         } else {
-            settings = Settings::default();
             debug!(
                 "Empty config file created at '{}'",
                 cli_config_path.display()
             );
-        }
+            Settings::default()
+        };
 
         let config = Config {
             settings,
@@ -154,6 +157,7 @@ impl Config {
         config.write_settings_to_file().wrap_err_with(|| {
             format!("Unable to create config at '{}'", cli_config_path.display())
         })?;
+
         Ok(config)
     }
 
@@ -164,6 +168,7 @@ impl Config {
                     "A node config will be created if you join a network or launch your own.",
                 )
         })?;
+
         let node_config = deserialise_node_config(&current_conn_info).wrap_err_with(|| {
             eyre!(format!(
                 "Unable to read current network connection information from '{}'.",
@@ -174,6 +179,7 @@ impl Config {
                 Please point towards another file with a valid node configuration.",
             )
         })?;
+
         Ok((self.node_config_path.clone(), node_config))
     }
 
@@ -212,6 +218,7 @@ impl Config {
                 "Caching current network connection information into '{}'",
                 cache_path.display()
             );
+
             NetworkInfo::ConnInfoLocation(cache_path.display().to_string())
         };
 
@@ -265,7 +272,7 @@ impl Config {
                         location
                     );
 
-                    if let Err(err) = remove_file(&location) {
+                    if let Err(err) = fs::remove_file(&location) {
                         println!(
                             "Failed to remove cached network connection information from '{}': {}",
                             location, err
@@ -298,18 +305,23 @@ impl Config {
                 "Creating '{}' folder for network connection info",
                 base_path.display()
             );
-            std::fs::create_dir_all(&base_path)
+            fs::create_dir_all(&base_path)
                 .wrap_err("Couldn't create folder for network connection info")?;
         }
 
         let contacts = self.get_network_info(name).await?;
         let conn_info = serialise_node_config(&contacts)?;
-        fs::write(&self.node_config_path, conn_info).wrap_err_with(|| {
+
+        let mut lock = RwLock::new(fs::File::create(&self.node_config_path)?);
+        let mut write_guard = lock.write()?;
+        write!(write_guard, "{}", conn_info).wrap_err_with(|| {
             format!(
                 "Unable to write network connection info in '{}'",
                 base_path.display(),
             )
-        })
+        })?;
+
+        Ok(())
     }
 
     pub async fn print_networks(&self) {
@@ -341,35 +353,44 @@ impl Config {
         let mut pb = self.cli_config_path.clone();
         pb.pop();
         pb.push(CONFIG_NETWORKS_DIRNAME);
+
         if !pb.exists() {
             println!(
                 "Creating '{}' folder for networks connection info cache",
                 pb.display()
             );
-            std::fs::create_dir_all(&pb)
+            fs::create_dir_all(&pb)
                 .wrap_err("Couldn't create folder for networks information cache")?;
         }
 
         pb.push(format!("{}_node_connection_info.config", network_name));
         let conn_info = serialise_node_config(node_config)?;
-        fs::write(&pb, conn_info)?;
+        let mut lock = RwLock::new(fs::File::create(pb.clone())?);
+        let mut write_guard = lock.write()?;
+        write!(write_guard, "{}", conn_info)?;
+
         Ok(pb)
     }
 
     fn write_settings_to_file(&self) -> Result<()> {
         let serialised_settings = serde_json::to_string(&self.settings)
             .wrap_err("Failed to serialise config settings")?;
-        fs::write(&self.cli_config_path, serialised_settings.as_bytes()).wrap_err_with(|| {
+
+        let mut lock = RwLock::new(fs::File::create(&self.cli_config_path)?);
+        let mut write_guard = lock.write()?;
+        write!(write_guard, "{}", serialised_settings).wrap_err_with(|| {
             format!(
                 "Unable to write config settings to '{}'",
                 self.cli_config_path.display()
             )
         })?;
+
         debug!(
             "Config settings at '{}' updated with: {:?}",
             self.cli_config_path.display(),
             self.settings
         );
+
         Ok(())
     }
 }
@@ -401,6 +422,7 @@ fn deserialise_node_config(bytes: &[u8]) -> Result<NodeConfig> {
     let genesis_key = PublicKey::bls_from_hex(&deserialized.0)?
         .bls()
         .ok_or_else(|| eyre!("Unexpectedly failed to obtain (BLS) genesis key."))?;
+
     Ok((genesis_key, deserialized.1))
 }
 
