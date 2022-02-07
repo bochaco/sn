@@ -12,8 +12,13 @@ use crate::messaging::{
     DstLocation, WireMsg,
 };
 use crate::node::{
-    api::cmds::Cmd, ed25519, messages::WireMsgUtils, network_knowledge::SectionAuthorityProvider,
-    node_info::Node, Error, Result,
+    api::cmds::Cmd,
+    dkg::SectionAuthUtils,
+    ed25519,
+    messages::WireMsgUtils,
+    network_knowledge::{NetworkKnowledge, SectionAuthorityProvider},
+    node_info::Node,
+    Error, Result,
 };
 use crate::peer::Peer;
 use crate::types::PublicKey;
@@ -187,6 +192,47 @@ impl JoiningAsRelocated {
                     addr
                 );
                 Err(Error::NodeNotReachable(addr))
+            }
+            JoinAsRelocatedResponse::Approval {
+                section_auth,
+                node_state,
+                section_chain,
+            } => {
+                if node_state.value.name != self.node.name() {
+                    trace!("Ignore JoinAsRelocatedResponse Approval, not for us");
+                    return Ok(None);
+                }
+
+                if !section_auth.verify(&section_chain) || !node_state.verify(&section_chain) {
+                    return Err(Error::InvalidMessage);
+                }
+
+                if !section_chain.check_trust(Some(&self.dst_section_key)) {
+                    error!(
+                        "Verification failed - untrusted JoinAsRelocatedResponse approval message",
+                    );
+                    return Ok(None);
+                }
+
+                let new_prefix = section_auth.value.prefix;
+
+                // This will also make additional validations for section chain and SAP
+                let new_network_knowledge = NetworkKnowledge::new(
+                    self.genesis_key,
+                    section_chain,
+                    section_auth.into_authed_state(),
+                    None, // current prefix map will be maintained when we relocate our Core
+                )?;
+
+                info!(
+                    "This node has been approved to join a section as relocated at {:?}",
+                    new_prefix,
+                );
+
+                Ok(Some(Cmd::HandleRelocationComplete {
+                    node: self.node.clone(),
+                    section: new_network_knowledge,
+                }))
             }
         }
     }

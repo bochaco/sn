@@ -8,10 +8,7 @@
 
 use super::{delivery_group, Comm, Core};
 
-use crate::messaging::{
-    system::{JoinResponse, MembershipState, NodeState, SigShare, SystemMsg},
-    WireMsg,
-};
+use crate::messaging::WireMsg;
 use crate::node::{
     api::cmds::Cmd,
     error::Result,
@@ -19,7 +16,6 @@ use crate::node::{
     node_info::Node,
     Event,
 };
-use crate::peer::Peer;
 use crate::types::log_markers::LogMarker;
 use crate::UsedSpace;
 
@@ -43,6 +39,7 @@ impl Core {
 
         let (section, section_key_share) =
             NetworkKnowledge::first_node(node.peer(), genesis_sk_set).await?;
+
         Self::new(
             comm,
             node,
@@ -222,56 +219,5 @@ impl Core {
         }
 
         Ok(cmds)
-    }
-
-    pub(crate) async fn send_accepted_online_share(
-        &self,
-        peer: Peer,
-        previous_name: Option<XorName>,
-    ) -> Result<Vec<Cmd>> {
-        let public_key_set = self.public_key_set().await?;
-        let section_key = public_key_set.public_key();
-
-        let node_state = NodeState {
-            name: peer.name(),
-            addr: peer.addr(),
-            state: MembershipState::Joined,
-            previous_name,
-        };
-        let serialized_details = bincode::serialize(&node_state)?;
-        let (index, signature_share) = self
-            .sign_with_section_key_share(&serialized_details, &section_key)
-            .await?;
-
-        let sig_share = SigShare {
-            public_key_set,
-            index,
-            signature_share,
-        };
-
-        let members = self
-            .network_knowledge
-            .section_signed_members()
-            .await
-            .into_iter()
-            .map(|itr| itr.into_authed_msg())
-            .collect();
-        let signed_sap = self
-            .network_knowledge
-            .section_signed_authority_provider()
-            .await;
-
-        let node_msg = SystemMsg::JoinResponse(Box::new(JoinResponse::ApprovalShare {
-            node_state,
-            sig_share,
-            section_auth: signed_sap.value.to_msg(),
-            section_signed: signed_sap.sig,
-            section_chain: self.network_knowledge.section_chain().await,
-            members,
-        }));
-
-        Ok(vec![
-            self.send_direct_msg(peer, node_msg, section_key).await?,
-        ])
     }
 }

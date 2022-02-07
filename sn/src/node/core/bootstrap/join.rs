@@ -8,7 +8,6 @@
 
 use super::{read_prefix_map_from_disk, UsedRecipientSaps};
 use crate::messaging::{
-    signature_aggregator::{Error as AggregatorError, SignatureAggregator},
     system::{
         JoinRejectionReason, JoinRequest, JoinResponse, ResourceProofResponse, SectionAuth,
         SystemMsg,
@@ -32,14 +31,12 @@ use backoff::{backoff::Backoff, ExponentialBackoff};
 use bls::PublicKey as BlsPublicKey;
 use futures::future;
 use resource_proof::ResourceProof;
-use std::collections::BTreeMap;
-use tokio::time::sleep;
-use tokio::{sync::mpsc, time::Duration};
+use tokio::{
+    sync::mpsc,
+    time::{sleep, Duration},
+};
 use tracing::Instrument;
 use xor_name::Prefix;
-
-// arbitrarily long. No join in a non splitting section should fail to get signature shares in anything like a few minutes
-const JOIN_SHARE_EXPIRATION_DURATION: Duration = Duration::from_secs(900);
 
 /// Join the network as new node.
 ///
@@ -76,8 +73,6 @@ struct Join<'a> {
     node: Node,
     prefix: Prefix,
     prefix_map: NetworkPrefixMap,
-    signature_aggregators: BTreeMap<BlsPublicKey, SignatureAggregator>,
-    node_state_serialized: Option<Vec<u8>>,
     backoff: ExponentialBackoff,
     aggregated: bool,
 }
@@ -95,8 +90,6 @@ impl<'a> Join<'a> {
             node,
             prefix: Prefix::default(),
             prefix_map,
-            signature_aggregators: BTreeMap::default(),
-            node_state_serialized: None,
             backoff: ExponentialBackoff {
                 initial_interval: Duration::from_millis(50),
                 max_interval: Duration::from_millis(750),
@@ -148,7 +141,6 @@ impl<'a> Join<'a> {
         let join_request = JoinRequest {
             section_key,
             resource_proof_response: None,
-            aggregated: None,
         };
 
         self.send_join_requests(join_request.clone(), &recipients, section_key, false)
@@ -190,7 +182,6 @@ impl<'a> Join<'a> {
                         );
                         continue;
                     }
-
                     trace!(
                         "This node has been approved to join the network at {:?}!",
                         section_auth.prefix,
@@ -210,114 +201,6 @@ impl<'a> Join<'a> {
                     )?;
 
                     return Ok((self.node, network_knowledge));
-                }
-                JoinResponse::ApprovalShare {
-                    node_state,
-                    sig_share,
-                    section_auth,
-                    section_signed,
-                    section_chain,
-                    ..
-                } => {
-                    // The JoinResponse::Redirect doesn't contains the proof_chain of the target
-                    // section. Hence self.prefix_map didn't get updated on receiving it.
-                    // In such case, we have to update self.prefix_map based on the received infos
-                    // within JoinResponse::ApprovalShare
-                    let section_auth = section_auth.into_state();
-                    let signed_sap = SectionAuth {
-                        value: section_auth,
-                        sig: section_signed,
-                    };
-                    match self.prefix_map.update(signed_sap, &section_chain) {
-                        Ok(updated) => {
-                            debug!(
-                                "Update prefix_map via JoinResponse::ApprovalShare: {:?}",
-                                updated
-                            );
-                        }
-                        Err(err) => {
-                            debug!(
-                                "Failed to update prefix_map via JoinResponse::ApprovalShare: {:?}",
-                                err
-                            );
-                        }
-                    }
-
-                    let serialized_details =
-                        if let Some(node_state_serialized) = &self.node_state_serialized {
-                            node_state_serialized.clone()
-                        } else {
-                            let node_state_serialized = bincode::serialize(&node_state)?;
-                            self.node_state_serialized = Some(node_state_serialized.clone());
-                            node_state_serialized
-                        };
-
-                    let sig_pk = sig_share.public_key_set.public_key();
-
-                    // get the aggregator or make a new one for this new section public key
-                    let aggregator =
-                        self.signature_aggregators.entry(sig_pk).or_insert_with(|| {
-                            SignatureAggregator::with_expiration(JOIN_SHARE_EXPIRATION_DURATION)
-                        });
-
-                    info!("Aggregating received ApprovalShare from {:?}", sender);
-                    match aggregator.add(&serialized_details, sig_share.clone()).await {
-                        Ok(sig) => {
-                            info!("Successfully aggregated ApprovalShares for joining the network");
-                            self.aggregated = true;
-
-                            let section_key = sig_share.public_key_set.public_key();
-                            let auth = SectionAuth {
-                                value: node_state,
-                                sig,
-                            };
-                            let join_req = JoinRequest {
-                                section_key,
-                                resource_proof_response: None,
-                                aggregated: Some(auth),
-                            };
-                            let name = self.node.name();
-                            let recipients: Vec<Peer> = if let Some(signed_sap) =
-                                self.prefix_map.closest_or_opposite(&name, None)
-                            {
-                                signed_sap.value.elders().cloned().collect()
-                            } else {
-                                warn!("cannot find recipients to send aggregated JoinApproval");
-                                continue;
-                            };
-                            trace!("Sending aggregated JoinRequest to {:?}", recipients);
-                            // Resend the JoinRequest now that we have collected enough ApprovalShares from the Elders
-                            self.send_join_requests(join_req, &recipients, section_key, false)
-                                .await?;
-                            continue;
-                        }
-                        Err(AggregatorError::NotEnoughShares) => continue,
-                        error => {
-                            warn!(
-                                "Error received as part of signature aggregation during join: {:?}",
-                                error
-                            );
-
-                            if sig_pk != section_key {
-                                // if we've have aggregation errors, we attempt a fresh join as there's likely been a key change
-                                let join_request = JoinRequest {
-                                    section_key,
-                                    resource_proof_response: None,
-                                    aggregated: None,
-                                };
-
-                                self.send_join_requests(
-                                    join_request,
-                                    &recipients,
-                                    section_key,
-                                    true,
-                                )
-                                .await?;
-                            }
-
-                            continue;
-                        }
-                    }
                 }
                 JoinResponse::Retry {
                     section_auth,
@@ -409,7 +292,6 @@ impl<'a> Join<'a> {
                     let join_request = JoinRequest {
                         section_key,
                         resource_proof_response: None,
-                        aggregated: None,
                     };
 
                     section_auth
@@ -468,7 +350,6 @@ impl<'a> Join<'a> {
                     let join_request = JoinRequest {
                         section_key,
                         resource_proof_response: None,
-                        aggregated: None,
                     };
 
                     section_auth
@@ -497,7 +378,6 @@ impl<'a> Join<'a> {
                             nonce,
                             nonce_signature,
                         }),
-                        aggregated: None,
                     };
                     let recipients = &[sender];
                     self.send_join_requests(join_request, recipients, section_key, false)

@@ -7,7 +7,9 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use crate::messaging::{
-    system::{DkgSessionId, JoinResponse, NodeCmd, SectionAuth, SystemMsg},
+    system::{
+        DkgSessionId, JoinResponse, NodeCmd, NodeState as NodeStateMsg, SectionAuth, SystemMsg,
+    },
     DstLocation, MsgKind, WireMsg,
 };
 use crate::node::{
@@ -20,43 +22,14 @@ use crate::node::{
 };
 use crate::peer::{Peer, UnnamedPeer};
 use crate::types::log_markers::LogMarker;
+use sn_membership::{Reconfig, SignedVote};
 
 use bls::PublicKey as BlsPublicKey;
 use xor_name::{Prefix, XorName};
 
 impl Core {
-    // Send proposal to all our elders.
-    pub(crate) async fn propose(&self, proposal: Proposal) -> Result<Vec<Cmd>> {
-        let elders = self
-            .network_knowledge
-            .authority_provider()
-            .await
-            .elders_vec();
-        self.send_proposal(elders, proposal).await
-    }
-
-    // Send `proposal` to `recipients`.
+    // Send `proposal` to `recipients` signing with provided `key_share`.
     pub(crate) async fn send_proposal(
-        &self,
-        recipients: Vec<Peer>,
-        proposal: Proposal,
-    ) -> Result<Vec<Cmd>> {
-        let section_key = self.network_knowledge.section_key().await;
-
-        let key_share = self
-            .section_keys_provider
-            .key_share(&section_key)
-            .await
-            .map_err(|err| {
-                trace!("Can't propose {:?}: {:?}", proposal, err);
-                err
-            })?;
-
-        self.send_proposal_with(recipients, proposal, &key_share)
-            .await
-    }
-
-    pub(crate) async fn send_proposal_with(
         &self,
         recipients: Vec<Peer>,
         proposal: Proposal,
@@ -123,10 +96,57 @@ impl Core {
         Ok(cmds)
     }
 
-    // ------------------------------------------------------------------------------------------------------------
-    // ------------------------------------------------------------------------------------------------------------
+    /// Broadcast proposal to Elders to accept a new peer to join the section membership
+    pub(crate) async fn propose_join_membership(&self, node_state: NodeState) -> Vec<Cmd> {
+        self.broadcast_membership_proposal(Reconfig::Join(node_state.to_msg()))
+            .await
+    }
 
-    /// Generate AntiEntropyUpdate message to update a peer with proof_chain and members list.
+    /// Broadcast proposal to Elders to remove a node from section membership
+    pub(crate) async fn propose_remove_from_membership(&self, node_state: NodeState) -> Vec<Cmd> {
+        self.broadcast_membership_proposal(Reconfig::Leave(node_state.to_msg()))
+            .await
+    }
+
+    // Broadcast a section membership proposal to Elders
+    async fn broadcast_membership_proposal(&self, reconfig: Reconfig<NodeStateMsg>) -> Vec<Cmd> {
+        let mut state = self.membership_voting.write().await;
+        match state.propose(reconfig.clone()) {
+            Ok(signed_vote) => {
+                trace!(">>> Membership proposal {:?}", reconfig,);
+                self.broadcast_membership_vote_msg(signed_vote).await
+            }
+            Err(err) => {
+                error!(
+                    ">>> Failed to generate membership proposal {:?}: {:?}",
+                    reconfig, err
+                );
+                vec![]
+            }
+        }
+    }
+
+    /// Broadcast BRB membership Vote message to Elders
+    pub(crate) async fn broadcast_membership_vote_msg(
+        &self,
+        signed_vote: SignedVote<Reconfig<NodeStateMsg>>,
+    ) -> Vec<Cmd> {
+        // Deliver each SignedVote to all current Elders
+        trace!(">>> Broadcasting Vote msg: {:?}", signed_vote);
+        let node_msg = SystemMsg::Membership(signed_vote);
+        match self.send_msg_to_our_elders(node_msg).await {
+            Ok(cmd) => vec![cmd],
+            Err(err) => {
+                error!(
+                    ">>> Failed to send SystemMsg::Membership message: {:?}",
+                    err
+                );
+                vec![]
+            }
+        }
+    }
+
+    // Generate AntiEntropyUpdate message to update a peer with proof_chain and members list.
     async fn generate_ae_update_msg(&self, dst_section_key: BlsPublicKey) -> Result<SystemMsg> {
         let section_signed_auth = self
             .network_knowledge
@@ -143,7 +163,7 @@ impl Core {
         {
             Ok(chain) => chain,
             Err(_) => {
-                // error getting chain from key, so let's send the whole thing
+                // error getting chain from key, so let's send the whole section chain
                 self.network_knowledge.section_chain().await
             }
         };
@@ -165,8 +185,11 @@ impl Core {
     }
 
     // Send NodeApproval to a joining node which makes them a section member
-    pub(crate) async fn send_node_approval(&self, node_state: SectionAuth<NodeState>) -> Vec<Cmd> {
-        let peer = node_state.peer().clone();
+    pub(crate) async fn send_node_approval(
+        &self,
+        node_state: SectionAuth<NodeStateMsg>,
+    ) -> Vec<Cmd> {
+        let peer = Peer::new(node_state.value.name, node_state.value.addr);
         let prefix = self.network_knowledge.prefix().await;
         info!("Our section with {:?} has approved peer {}.", prefix, peer,);
 
@@ -177,7 +200,7 @@ impl Core {
                 .section_signed_authority_provider()
                 .await
                 .into_authed_msg(),
-            node_state: node_state.into_authed_msg(),
+            node_state,
             section_chain: self.network_knowledge.section_chain().await,
         }));
 
@@ -347,14 +370,14 @@ impl Core {
     pub(crate) async fn send_relocate(
         &self,
         recipient: Peer,
-        node_state: SectionAuth<NodeState>,
+        node_state: SectionAuth<NodeStateMsg>,
     ) -> Result<Vec<Cmd>> {
         let section_pk = self.network_knowledge.section_key().await;
         let dst = DstLocation::Node {
             name: recipient.name(),
             section_pk,
         };
-        let node_msg = SystemMsg::Relocate(node_state.into_authed_msg());
+        let node_msg = SystemMsg::Relocate(node_state);
 
         let wire_msg =
             WireMsg::single_src(&self.node.read().await.clone(), dst, node_msg, section_pk)?;

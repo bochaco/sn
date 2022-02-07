@@ -281,8 +281,7 @@ impl Core {
                 .authority_provider()
                 .await
                 .elders_vec();
-            self.send_proposal_with(recipients, proposal, &key_share)
-                .await
+            self.send_proposal(recipients, proposal, &key_share).await
         }
     }
 

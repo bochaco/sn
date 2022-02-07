@@ -6,7 +6,7 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
-use super::Cmd;
+use super::{Cmd, Event};
 use crate::messaging::{
     serialisation::{
         AE_MSG_PRIORITY, DKG_MSG_PRIORITY, INFRASTRUCTURE_MSG_PRIORITY, JOIN_RESPONSE_PRIORITY,
@@ -490,10 +490,8 @@ impl Dispatcher {
             Cmd::HandleAgreement { proposal, sig } => {
                 self.core.handle_general_agreements(proposal, sig).await
             }
-            Cmd::HandleNewNodeOnline(auth) => {
-                self.core
-                    .handle_online_agreement(auth.value.into_state(), auth.sig)
-                    .await
+            Cmd::HandleNewNodeOnline(node_state) => {
+                Ok(self.core.propose_join_membership(node_state).await)
             }
             Cmd::HandleNewEldersAgreement { proposal, sig } => match proposal {
                 Proposal::NewElders(section_auth) => {
@@ -542,13 +540,22 @@ impl Dispatcher {
                 .await
                 .into_iter()
                 .collect()),
-            Cmd::SendAcceptedOnlineShare {
-                peer,
-                previous_name,
-            } => {
+            Cmd::HandleRelocationComplete { node, section } => {
+                let previous_name = self.core.node.read().await.name();
+                let new_keypair = node.keypair.clone();
+
+                self.core.relocate(node, section).await?;
+
                 self.core
-                    .send_accepted_online_share(peer, previous_name)
-                    .await
+                    .send_event(Event::Relocated {
+                        previous_name,
+                        new_keypair,
+                    })
+                    .await;
+
+                trace!("{}", LogMarker::RelocateEnd);
+
+                Ok(vec![])
             }
             Cmd::ProposeOffline(name) => self.core.propose_offline(name).await,
             Cmd::StartConnectivityTest(name) => Ok(vec![

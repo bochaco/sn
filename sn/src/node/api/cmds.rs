@@ -8,12 +8,13 @@
 
 use crate::messaging::{
     serialisation::{DKG_MSG_PRIORITY, INFRASTRUCTURE_MSG_PRIORITY},
-    system::{DkgFailureSigSet, KeyedSig, NodeState, SectionAuth, SystemMsg},
+    system::{DkgFailureSigSet, KeyedSig, SystemMsg},
     DstLocation, MsgId, NodeMsgAuthority, WireMsg,
 };
 use crate::node::{
     core::Proposal,
-    network_knowledge::{SectionAuthorityProvider, SectionKeyShare},
+    network_knowledge::{NetworkKnowledge, NodeState, SectionAuthorityProvider, SectionKeyShare},
+    node_info::Node,
     Result, XorName,
 };
 use crate::peer::{Peer, UnnamedPeer};
@@ -29,7 +30,7 @@ use std::{
 
 /// Internal cmds for a node.
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum Cmd {
     /// Handle `message` from `sender`.
     /// Holding the WireMsg that has been received from the network,
@@ -59,8 +60,8 @@ pub(crate) enum Cmd {
     HandlePeerLost(Peer),
     /// Handle agreement on a proposal.
     HandleAgreement { proposal: Proposal, sig: KeyedSig },
-    /// Handle a new Node joining agreement.
-    HandleNewNodeOnline(SectionAuth<NodeState>),
+    /// Handle a new Node joining request.
+    HandleNewNodeOnline(NodeState),
     /// Handle agree on elders. This blocks node message processing until complete.
     HandleNewEldersAgreement { proposal: Proposal, sig: KeyedSig },
     /// Handle the outcome of a DKG session where we are one of the participants (that is, one of
@@ -91,11 +92,12 @@ pub(crate) enum Cmd {
     /// Schedule a timeout after the given duration. When the timeout expires, a `HandleTimeout`
     /// cmd is raised. The token is used to identify the timeout.
     ScheduleTimeout { duration: Duration, token: u64 },
-    /// Test peer's connectivity
-    SendAcceptedOnlineShare {
-        peer: Peer,
-        // Previous name if relocated.
-        previous_name: Option<XorName>,
+    /// Once we joined as relocated to a new section, switch our local section info to new section.
+    HandleRelocationComplete {
+        /// New Node state and information
+        node: Node,
+        /// New section's knowledge where we relocated
+        section: NetworkKnowledge,
     },
     /// Proposes a peer as offline
     ProposeOffline(XorName),
@@ -163,9 +165,9 @@ impl fmt::Display for Cmd {
             Cmd::SendMsgDeliveryGroup { wire_msg, .. } => {
                 write!(f, "SendMsgDeliveryGroup {:?}", wire_msg.msg_id())
             }
-            Cmd::SendAcceptedOnlineShare { .. } => write!(f, "SendAcceptedOnlineShare"),
             Cmd::ProposeOffline(_) => write!(f, "ProposeOffline"),
             Cmd::StartConnectivityTest(_) => write!(f, "StartConnectivityTest"),
+            Cmd::HandleRelocationComplete { .. } => write!(f, "HandleRelocationComplete"),
             Cmd::TestConnectivity(_) => write!(f, "TestConnectivity"),
         }
     }

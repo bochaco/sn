@@ -155,9 +155,9 @@ impl NetworkKnowledge {
         // don't hold write lock
         drop(signed_sap);
 
-        let _updated = self
-            .merge_members(new_network_nowledge.section_signed_members().await)
-            .await?;
+        // TODO: set full set of new members, current + archived
+        self.set_members(new_network_nowledge.section_signed_members().await)
+            .await;
 
         Ok(())
     }
@@ -171,8 +171,11 @@ impl NetworkKnowledge {
         let secret_key_share = genesis_sk_set.secret_key_share(0);
         let genesis_key = public_key_set.public_key();
 
-        let section_auth =
-            create_first_section_authority_provider(&public_key_set, &secret_key_share, peer)?;
+        let section_auth = create_first_section_authority_provider(
+            &public_key_set,
+            &secret_key_share,
+            peer.clone(),
+        )?;
 
         let network_knowledge = NetworkKnowledge::new(
             genesis_key,
@@ -181,14 +184,15 @@ impl NetworkKnowledge {
             None,
         )?;
 
-        for peer in network_knowledge.signed_sap.read().await.elders().cloned() {
-            let node_state = NodeState::joined(peer, None);
-            let sig = create_first_sig(&public_key_set, &secret_key_share, &node_state)?;
-            let _changed = network_knowledge.section_peers.update(SectionAuth {
-                value: node_state,
-                sig,
-            });
-        }
+        let node_state = NodeState::joined(peer, None);
+        let sig = create_first_sig(&public_key_set, &secret_key_share, &node_state)?;
+        let genesis_elder = SectionAuth {
+            value: node_state,
+            sig,
+        };
+        let _changed = network_knowledge
+            .set_members(vec![genesis_elder].into_iter().collect())
+            .await;
 
         let section_key_share = SectionKeyShare {
             public_key_set,
@@ -219,8 +223,9 @@ impl NetworkKnowledge {
                     .get_proof_chain(&self.genesis_key, &section_key)
                 {
                     Ok(section_chain) => {
-                        // Remove any peer which doesn't belong to our new section's prefix
-                        self.section_peers.retain(prefix);
+                        // TODO: set new members, ...we should have cached the
+                        // new members in this case, just like we have cached the SAP...
+
                         // Prune list of archived members
                         self.section_peers
                             .prune_members_archive(&section_chain)
@@ -312,8 +317,6 @@ impl NetworkKnowledge {
                 // and possibly being kicked out of the group of Elders.
                 if switch_to_new_sap && provided_sap.prefix().matches(our_name) {
                     let our_prev_prefix = self.prefix().await;
-                    // Remove any peer which doesn't belong to our new section's prefix
-                    self.section_peers.retain(&provided_sap.prefix());
                     info!(
                         "Updated our section's SAP ({:?} to {:?}) with new one: {:?}",
                         our_prev_prefix,
@@ -358,13 +361,7 @@ impl NetworkKnowledge {
                 .map(|member| member.into_authed_state())
                 .collect();
 
-            if self.merge_members(peers).await? {
-                let prefix = self.prefix().await;
-                info!(
-                    "Updated our section's members ({:?}): {:?}",
-                    prefix, self.section_peers
-                );
-            }
+            self.set_members(peers).await;
         }
 
         Ok(there_was_an_update)
@@ -409,62 +406,27 @@ impl NetworkKnowledge {
         &self.genesis_key
     }
 
-    // Try to merge this `NetworkKnowledge` members with `peers`.
-    pub(crate) async fn merge_members(
-        &self,
-        peers: BTreeSet<SectionAuth<NodeState>>,
-    ) -> Result<bool> {
-        let mut there_was_an_update = false;
-        let chain = self.chain.read().await.clone();
+    /// Set current section members to this `NetworkKnowledge`.
+    pub(crate) async fn set_members(&self, peers: BTreeSet<SectionAuth<NodeState>>) {
+        let prefix = self.prefix().await;
+        trace!(
+            "Updating section members ({:?}), new members: {:?}",
+            prefix,
+            peers
+        );
 
+        let chain = self.chain.read().await.clone();
         for node_state in peers.iter() {
-            trace!(
-                "Updating section members. Name: {:?}, new state: {:?}",
-                node_state.name(),
-                node_state.state()
-            );
+            // We should be getting this from trusted sources, but just to get
+            // some log alert in case some inconsistencies hhave taken place
             if !node_state.verify(&chain) {
-                error!(
-                    "Can't update section member, name: {:?}, new state: {:?}",
-                    node_state.name(),
-                    node_state.state()
-                );
-            } else if self.section_peers.update(node_state.clone()) {
-                there_was_an_update = true;
+                error!("Member state verification failed: {:?}", node_state.value);
+                return;
             }
         }
 
-        self.section_peers.retain(&self.prefix().await);
-
-        Ok(there_was_an_update)
-    }
-
-    /// Update the member. Returns whether it actually updated it.
-    pub(super) async fn update_member(&self, node_state: SectionAuth<NodeState>) -> bool {
-        let node_name = node_state.name();
-        trace!(
-            "Updating section member state, name: {:?}, new state: {:?}",
-            node_name,
-            node_state.state()
-        );
-        // let's check the node state is properly signed by one of the keys in our chain
-        if !node_state.verify(&*self.chain.read().await) {
-            error!(
-                "Can't update section member, name: {:?}, new state: {:?}",
-                node_name,
-                node_state.state()
-            );
-            return false;
-        }
-
-        let updated = self.section_peers.update(node_state);
-        trace!(
-            "Section member state, name: {:?}, updated: {}",
-            node_name,
-            updated
-        );
-
-        updated
+        self.section_peers.set_members(peers.clone()).await;
+        info!("Section members updated ({:?}): {:?}", prefix, peers);
     }
 
     /// Return a copy of our section chain
@@ -531,14 +493,11 @@ impl NetworkKnowledge {
         // Candidates for elders out of all the nodes in the section, even out of the
         // relocating nodes if there would not be enough instead.
         let sap = self.authority_provider().await;
-        let expected_peers =
-            self.section_peers
-                .elder_candidates(elder_count(), &sap, excluded_names, None);
-        info!(
-            ">>>> ELDER CANDIDATES {}: {:?}",
-            expected_peers.len(),
-            expected_peers
-        );
+        let expected_peers = self
+            .section_peers
+            .elder_candidates(elder_count(), &sap, excluded_names, None)
+            .await;
+
         let expected_names: BTreeSet<_> = expected_peers.iter().map(Peer::name).collect();
         let current_names: BTreeSet<_> = sap.names();
 
@@ -582,6 +541,7 @@ impl NetworkKnowledge {
     pub(super) async fn section_members(&self) -> BTreeSet<NodeState> {
         self.section_peers
             .members()
+            .await
             .into_iter()
             .map(|state| state.value)
             .collect()
@@ -589,18 +549,18 @@ impl NetworkKnowledge {
 
     /// Returns current list of section signed members.
     pub(super) async fn section_signed_members(&self) -> BTreeSet<SectionAuth<NodeState>> {
-        self.section_peers.members()
+        self.section_peers.members().await
     }
 
     /// Returns current section size, i.e. number of peers in the section.
     pub(super) async fn section_size(&self) -> usize {
-        self.section_peers.num_of_members()
+        self.section_peers.num_of_members().await
     }
 
     /// Returns live adults from our section.
     pub(super) async fn adults(&self) -> Vec<Peer> {
         let mut live_adults = vec![];
-        for node_state in self.section_peers.members() {
+        for node_state in self.section_peers.members().await {
             if !self.is_elder(&node_state.name()).await {
                 live_adults.push(node_state.peer().clone())
             }
@@ -610,7 +570,7 @@ impl NetworkKnowledge {
 
     /// Get info for the member with the given name.
     pub(crate) async fn get_section_member(&self, name: &XorName) -> Option<NodeState> {
-        self.section_peers.get(name)
+        self.section_peers.get(name).await
     }
 
     /// Get info for the member with the given name either from current members list,
@@ -619,22 +579,23 @@ impl NetworkKnowledge {
         &self,
         name: &XorName,
     ) -> Option<SectionAuth<NodeState>> {
-        self.section_peers.is_either_member_or_archived(name)
+        self.section_peers.is_either_member_or_archived(name).await
     }
 
     /// Get info for the member with the given name.
     pub(crate) async fn is_section_member(&self, name: &XorName) -> bool {
-        self.section_peers.is_member(name)
+        self.section_peers.is_member(name).await
     }
 
     /// Returns whether the given peer is already relocated to our section.
     pub(crate) async fn is_relocated_to_our_section(&self, name: &XorName) -> bool {
-        self.section_peers.is_relocated_to_our_section(name)
+        self.section_peers.is_relocated_to_our_section(name).await
     }
 
     pub(super) async fn find_member_by_addr(&self, addr: &SocketAddr) -> Option<Peer> {
         self.section_peers
             .members()
+            .await
             .into_iter()
             .find(|info| &info.addr() == addr)
             .map(|info| info.peer().clone())
@@ -683,20 +644,16 @@ impl NetworkKnowledge {
         let sap = self.authority_provider().await;
 
         let our_prefix = self.prefix().await.pushed(prefix_next_bit);
-        let our_elders = self.section_peers.elder_candidates(
-            elder_count(),
-            &sap,
-            excluded_names,
-            Some(&our_prefix),
-        );
+        let our_elders = self
+            .section_peers
+            .elder_candidates(elder_count(), &sap, excluded_names, Some(&our_prefix))
+            .await;
 
         let other_prefix = self.prefix().await.pushed(!prefix_next_bit);
-        let other_elders = self.section_peers.elder_candidates(
-            elder_count(),
-            &sap,
-            excluded_names,
-            Some(&other_prefix),
-        );
+        let other_elders = self
+            .section_peers
+            .elder_candidates(elder_count(), &sap, excluded_names, Some(&other_prefix))
+            .await;
 
         let our_elder_candidates = ElderCandidates::new(our_prefix, our_elders);
         let other_elder_candidates = ElderCandidates::new(other_prefix, other_elders);
@@ -722,6 +679,7 @@ impl NetworkKnowledge {
         let (our_new_size, sibling_new_size) = self
             .section_peers
             .members()
+            .await
             .iter()
             .filter(|info| !excluded_names.contains(&info.name()))
             .map(|info| info.name().bit(next_bit_index) == prefix_next_bit)

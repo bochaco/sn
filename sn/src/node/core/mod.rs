@@ -44,7 +44,7 @@ use super::{
 use crate::messaging::{
     data::OperationId,
     signature_aggregator::SignatureAggregator,
-    system::{DkgSessionId, SystemMsg},
+    system::{DkgSessionId, NodeState as NodeStateMsg, SystemMsg},
     AuthorityProof, SectionAuth,
 };
 use crate::node::error::Result;
@@ -57,6 +57,7 @@ use capacity::Capacity;
 use itertools::Itertools;
 use liveness_tracking::Liveness;
 use resource_proof::ResourceProof;
+use sn_membership::Membership;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     net::SocketAddr,
@@ -99,6 +100,7 @@ pub(crate) struct DkgSessionInfo {
 pub(crate) struct Core {
     pub(crate) comm: Comm,
     pub(crate) node: Arc<RwLock<Node>>,
+    membership_voting: Arc<RwLock<Membership<NodeStateMsg>>>,
     network_knowledge: NetworkKnowledge,
     pub(crate) section_keys_provider: SectionKeysProvider,
     message_aggregator: SignatureAggregator,
@@ -130,6 +132,29 @@ impl Core {
         used_space: UsedSpace,
         root_storage_dir: PathBuf,
     ) -> Result<Self> {
+        let mut membership_voting = if let Some(key_share) = &section_key_share {
+            // Initialise our BRB membership state with our key share and Elders pk set
+            let num_of_elders = network_knowledge.authority_provider().await.elder_count();
+
+            let node_id = key_share.index as u8;
+            Membership::from(
+                (node_id, key_share.secret_key_share.clone()),
+                key_share.public_key_set.clone(),
+                num_of_elders,
+            )
+        } else {
+            // TODO: perhaps we shall keep an Option in Core::membership_voting instead of this
+            unimplemented!();
+        };
+
+        // Populate the BRB membership state with our current members
+        // TODO: provide a Elders signed version of members so it can be verified.
+        network_knowledge
+            .section_members()
+            .await
+            .into_iter()
+            .for_each(|adult| membership_voting.force_join(adult.to_msg()));
+
         let section_keys_provider = SectionKeysProvider::new(section_key_share).await;
 
         // make sure the Node has the correct local addr as Comm
@@ -153,6 +178,7 @@ impl Core {
             comm,
             node: Arc::new(RwLock::new(node)),
             network_knowledge,
+            membership_voting: Arc::new(RwLock::new(membership_voting)),
             section_keys_provider,
             dkg_sessions: Arc::new(RwLock::new(HashMap::default())),
             proposal_aggregator: SignatureAggregator::default(),
@@ -175,6 +201,28 @@ impl Core {
     ////////////////////////////////////////////////////////////////////////////
     // Miscellaneous
     ////////////////////////////////////////////////////////////////////////////
+
+    /// Update our private `joins allowed` flag according to our current section information
+    pub(crate) async fn update_joins_allowed_flag(&self) {
+        // Do not disable node joins in first section.
+        let is_allowed = if cfg!(feature = "always-joinable")
+            || self.network_knowledge.prefix().await.is_empty()
+        {
+            true
+        } else {
+            // if we are ready to split we don't accept new nodes to join
+            let our_name = self.node.read().await.name();
+            self.network_knowledge
+                .get_split_info(&our_name, &BTreeSet::default())
+                .await
+                .is_none()
+            // TODO:
+            // } else if storage_level < MIN_LEVEL_WHEN_FULL {
+            //    false
+        };
+
+        *self.joins_allowed.write().await = is_allowed;
+    }
 
     pub(crate) async fn state_snapshot(&self) -> StateSnapshot {
         StateSnapshot {
@@ -245,13 +293,6 @@ impl Core {
 
                 if !self.section_keys_provider.is_empty().await {
                     cmds.extend(self.promote_and_demote_elders().await?);
-
-                    // Whenever there is an elders change, casting a round of joins_allowed
-                    // proposals to sync.
-                    cmds.extend(
-                        self.propose(Proposal::JoinsAllowed(*self.joins_allowed.read().await))
-                            .await?,
-                    );
                 }
 
                 self.print_network_stats().await;
