@@ -44,8 +44,10 @@ use super::{
 use crate::messaging::{
     data::OperationId,
     signature_aggregator::SignatureAggregator,
-    system::{DkgSessionId, NodeState as NodeStateMsg, SystemMsg},
-    AuthorityProof, SectionAuth,
+    system::{
+        DkgSessionId, NodeState as NodeStateMsg, SectionAuth as SectionSignedAuth, SystemMsg,
+    },
+    AuthorityProof, SectionAuth, SectionAuthorityProvider,
 };
 use crate::node::error::Result;
 use crate::peer::Peer;
@@ -57,7 +59,7 @@ use capacity::Capacity;
 use itertools::Itertools;
 use liveness_tracking::Liveness;
 use resource_proof::ResourceProof;
-use sn_membership::Membership;
+use sn_membership::{Handover, Membership};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     net::SocketAddr,
@@ -101,6 +103,7 @@ pub(crate) struct Core {
     pub(crate) comm: Comm,
     pub(crate) node: Arc<RwLock<Node>>,
     membership_voting: Arc<RwLock<Membership<NodeStateMsg>>>,
+    elders_handover_voting: Arc<RwLock<Handover<SectionSignedAuth<SectionAuthorityProvider>>>>,
     network_knowledge: NetworkKnowledge,
     pub(crate) section_keys_provider: SectionKeysProvider,
     message_aggregator: SignatureAggregator,
@@ -132,20 +135,33 @@ impl Core {
         used_space: UsedSpace,
         root_storage_dir: PathBuf,
     ) -> Result<Self> {
-        let mut membership_voting = if let Some(key_share) = &section_key_share {
-            // Initialise our BRB membership state with our key share and Elders pk set
-            let num_of_elders = network_knowledge.authority_provider().await.elder_count();
+        let (mut membership_voting, elders_handover_voting) =
+            if let Some(key_share) = &section_key_share {
+                // Initialise our BRB membership state with our key share and Elders pk set
+                let num_of_elders = network_knowledge.authority_provider().await.elder_count();
 
-            let node_id = key_share.index as u8;
-            Membership::from(
-                (node_id, key_share.secret_key_share.clone()),
-                key_share.public_key_set.clone(),
-                num_of_elders,
-            )
-        } else {
-            // TODO: perhaps we shall keep an Option in Core::membership_voting instead of this
-            unimplemented!();
-        };
+                let node_id = key_share.index as u8;
+                let membership_voting = Membership::from(
+                    (node_id, key_share.secret_key_share.clone()),
+                    key_share.public_key_set.clone(),
+                    num_of_elders,
+                );
+
+                // FIXME!!!: seet the correct gene/section-id value
+                let unique_section_id = 0;
+
+                let elders_handover_voting = Handover::from(
+                    (node_id, key_share.secret_key_share.clone()),
+                    key_share.public_key_set.clone(),
+                    num_of_elders,
+                    unique_section_id,
+                );
+
+                (membership_voting, elders_handover_voting)
+            } else {
+                // TODO: perhaps we shall keep an Option in Core::membership_voting instead of this
+                unimplemented!();
+            };
 
         // Populate the BRB membership state with our current members
         // TODO: provide a Elders signed version of members so it can be verified.
@@ -179,6 +195,7 @@ impl Core {
             node: Arc::new(RwLock::new(node)),
             network_knowledge,
             membership_voting: Arc::new(RwLock::new(membership_voting)),
+            elders_handover_voting: Arc::new(RwLock::new(elders_handover_voting)),
             section_keys_provider,
             dkg_sessions: Arc::new(RwLock::new(HashMap::default())),
             proposal_aggregator: SignatureAggregator::default(),

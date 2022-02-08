@@ -9,6 +9,7 @@
 mod agreement;
 mod anti_entropy;
 mod dkg;
+mod elders_handover;
 mod join;
 mod membership;
 mod proposals;

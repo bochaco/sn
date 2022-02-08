@@ -75,39 +75,43 @@ impl Core {
             }
         }
 
-        let mut cmds = vec![];
+        let serialised_proposal = match proposal.as_signable_bytes() {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                error!(
+                    "Failed to serialise proposal from {}, {:?}: {:?}",
+                    sender, msg_id, error
+                );
+                return Ok(vec![]);
+            }
+        };
 
-        match proposal.as_signable_bytes() {
-            Err(error) => error!(
-                "Failed to serialise proposal from {}, {:?}: {:?}",
-                sender, msg_id, error
-            ),
-            Ok(serialised_proposal) => {
-                match self
-                    .proposal_aggregator
-                    .add(&serialised_proposal, sig_share)
-                    .await
-                {
-                    Ok(sig) => match proposal {
-                        Proposal::NewElders(_) => {
-                            cmds.push(Cmd::HandleNewEldersAgreement { proposal, sig })
-                        }
-                        _ => cmds.push(Cmd::HandleAgreement { proposal, sig }),
-                    },
-                    Err(AggregatorError::NotEnoughShares) => {
-                        trace!(
-                            "Proposal from {} inserted in aggregator, not enough sig shares yet: {:?}",
-                            sender,
-                            msg_id
-                        );
-                    }
-                    Err(error) => {
-                        error!(
-                            "Failed to add proposal from {}, {:?}: {:?}",
-                            sender, msg_id, error
-                        );
-                    }
+        let mut cmds = vec![];
+        match self
+            .proposal_aggregator
+            .add(&serialised_proposal, sig_share)
+            .await
+        {
+            Ok(sig) => match proposal {
+                Proposal::NewElders(signed_sap) => {
+                    cmds.push(Cmd::HandleNewEldersAgreement { signed_sap, sig })
                 }
+                Proposal::SectionInfo(section_auth) => {
+                    cmds.push(Cmd::HandleSectionInfoAgreement { section_auth, sig })
+                }
+            },
+            Err(AggregatorError::NotEnoughShares) => {
+                trace!(
+                    "Proposal from {} inserted in aggregator, not enough sig shares yet: {:?}",
+                    sender,
+                    msg_id
+                );
+            }
+            Err(error) => {
+                error!(
+                    "Failed to aggregate proposal from {}, {:?}: {:?}",
+                    sender, msg_id, error
+                );
             }
         }
 

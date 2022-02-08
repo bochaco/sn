@@ -627,7 +627,7 @@ async fn handle_agreement_on_offline_of_non_elder() -> Result<()> {
     let sig = keyed_signed(sk_set.secret_key(), &proposal.as_signable_bytes()?);
 
     let _cmds = dispatcher
-        .process_cmd(Cmd::HandleAgreement { proposal, sig }, "cmd-id")
+        .process_cmd(Cmd::HandleSectionInfoAgreement { proposal, sig }, "cmd-id")
         .await?;
 
     assert!(!dispatcher
@@ -683,7 +683,7 @@ async fn handle_agreement_on_offline_of_elder() -> Result<()> {
     let sig = keyed_signed(sk_set.secret_key(), &proposal.as_signable_bytes()?);
 
     let cmds = dispatcher
-        .process_cmd(Cmd::HandleAgreement { proposal, sig }, "cmd-id")
+        .process_cmd(Cmd::HandleSectionInfoAgreement { proposal, sig }, "cmd-id")
         .await?;
 
     // Verify we sent a `DkgStart` message with the expected participants.
@@ -1163,8 +1163,8 @@ async fn handle_elders_update() -> Result<()> {
     let sk_set1 = SecretKeySet::random();
 
     let pk1 = sk_set1.secret_key().public_key();
-    // Create `HandleAgreement` cmd for an `NewElders` proposal. This will demote one of the
-    // current elders and promote the oldest peer.
+    // Create `HandleSectionInfoAgreement` cmd for an `NewElders` proposal.
+    // This will demote one of the current elders and promote the oldest peer.
     let sap1 = SectionAuthorityProvider::new(
         iter::once(node.peer())
             .chain(other_elder_peers.clone())

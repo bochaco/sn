@@ -21,25 +21,7 @@ use std::collections::BTreeSet;
 // Agreement
 impl Core {
     #[instrument(skip(self), level = "trace")]
-    pub(crate) async fn handle_general_agreements(
-        &self,
-        proposal: Proposal,
-        sig: KeyedSig,
-    ) -> Result<Vec<Cmd>> {
-        debug!("handle agreement on {:?}", proposal);
-        match proposal {
-            Proposal::SectionInfo(section_auth) => {
-                self.handle_section_info_agreement(section_auth, sig).await
-            }
-            Proposal::NewElders(_) => {
-                error!("Elders agreement should be handled in a separate blocking fashion");
-                Ok(vec![])
-            }
-        }
-    }
-
-    #[instrument(skip(self), level = "trace")]
-    async fn handle_section_info_agreement(
+    pub(crate) async fn handle_section_info_agreement(
         &self,
         section_auth: SectionAuthorityProvider,
         sig: KeyedSig,
@@ -56,19 +38,19 @@ impl Core {
                 section_auth.prefix()
             );
 
-            let signed_section_auth = SectionAuth::new(section_auth, sig.clone());
+            let signed_sap = SectionAuth::new(section_auth, sig.clone());
             let saps_candidates = self
                 .network_knowledge
                 .promote_and_demote_elders(&self.node.read().await.name(), &BTreeSet::new())
                 .await;
 
-            if !saps_candidates.contains(&signed_section_auth.elder_candidates()) {
+            if !saps_candidates.contains(&signed_sap.elder_candidates()) {
                 // SectionInfo out of date, ignore.
                 return Ok(vec![]);
             }
 
             // Send the `NewElders` proposal to all of the to-be-Elders so it's aggregated by them.
-            let proposal = Proposal::NewElders(signed_section_auth);
+            let proposal = Proposal::NewElders(signed_sap);
             let proposal_recipients = saps_candidates
                 .iter()
                 .flat_map(|info| info.elders())
@@ -101,13 +83,13 @@ impl Core {
     #[instrument(skip(self), level = "trace")]
     pub(crate) async fn handle_new_elders_agreement(
         &self,
-        signed_section_auth: SectionAuth<SectionAuthorityProvider>,
+        signed_sap: SectionAuth<SectionAuthorityProvider>,
         key_sig: KeyedSig,
     ) -> Result<Vec<Cmd>> {
         trace!("{}", LogMarker::HandlingNewEldersAgreement);
         let updates = self.split_barrier.write().await.process(
             &self.network_knowledge.prefix().await,
-            signed_section_auth.clone(),
+            signed_sap.clone(),
             key_sig,
         );
 

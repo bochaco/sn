@@ -8,11 +8,10 @@
 
 use crate::messaging::{
     serialisation::{DKG_MSG_PRIORITY, INFRASTRUCTURE_MSG_PRIORITY},
-    system::{DkgFailureSigSet, KeyedSig, SystemMsg},
+    system::{DkgFailureSigSet, KeyedSig, SectionAuth, SystemMsg},
     DstLocation, MsgId, NodeMsgAuthority, WireMsg,
 };
 use crate::node::{
-    core::Proposal,
     network_knowledge::{NetworkKnowledge, NodeState, SectionAuthorityProvider, SectionKeyShare},
     node_info::Node,
     Result, XorName,
@@ -59,11 +58,18 @@ pub(crate) enum Cmd {
     /// Handle peer that's been detected as lost.
     HandlePeerLost(Peer),
     /// Handle agreement on a proposal.
-    HandleAgreement { proposal: Proposal, sig: KeyedSig },
+    HandleSectionInfoAgreement {
+        section_auth: SectionAuthorityProvider,
+        sig: KeyedSig,
+    },
     /// Handle a new Node joining request.
     HandleNewNodeOnline(NodeState),
-    /// Handle agree on elders. This blocks node message processing until complete.
-    HandleNewEldersAgreement { proposal: Proposal, sig: KeyedSig },
+    /// Handle agreement of new Elders triggering consensus to handover.
+    /// This blocks node message processing until complete.
+    HandleNewEldersAgreement {
+        signed_sap: SectionAuth<SectionAuthorityProvider>,
+        sig: KeyedSig,
+    },
     /// Handle the outcome of a DKG session where we are one of the participants (that is, one of
     /// the proposed new elders).
     HandleDkgOutcome {
@@ -118,7 +124,7 @@ impl Cmd {
             Self::HandleMsg { wire_msg, .. } => wire_msg.into_msg()?.priority(),
             Self::HandleDkgOutcome { .. } | Self::HandleDkgFailure(_) => DKG_MSG_PRIORITY,
             Self::HandleNewEldersAgreement { .. } => DKG_MSG_PRIORITY, // its end of DKG
-            Self::HandleAgreement { .. } | Self::HandleSystemMsg { .. } => {
+            Self::HandleSectionInfoAgreement { .. } | Self::HandleSystemMsg { .. } => {
                 INFRASTRUCTURE_MSG_PRIORITY
             }
             _ => -2,
@@ -140,7 +146,7 @@ impl fmt::Display for Cmd {
                 write!(f, "HandleMsg {:?}", wire_msg.msg_id())
             }
             Cmd::HandlePeerLost(peer) => write!(f, "HandlePeerLost({:?})", peer.name()),
-            Cmd::HandleAgreement { .. } => write!(f, "HandleAgreement"),
+            Cmd::HandleSectionInfoAgreement { .. } => write!(f, "HandleSectionInfoAgreement"),
             Cmd::HandleNewEldersAgreement { .. } => write!(f, "HandleNewEldersAgreement"),
             Cmd::HandleNewNodeOnline(_) => write!(f, "HandleNewNodeOnline"),
             Cmd::HandleDkgOutcome { .. } => write!(f, "HandleDkgOutcome"),

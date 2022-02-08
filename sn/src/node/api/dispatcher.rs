@@ -16,7 +16,7 @@ use crate::messaging::{
     DstLocation, EndUser, MsgKind, WireMsg,
 };
 use crate::node::{
-    core::{Core, Proposal, SendStatus},
+    core::{Core, SendStatus},
     Error, Result,
 };
 use crate::peer::Peer;
@@ -487,23 +487,17 @@ impl Dispatcher {
                 original_bytes,
             } => self.core.handle_msg(sender, wire_msg, original_bytes).await,
             Cmd::HandleTimeout(token) => self.core.handle_timeout(token).await,
-            Cmd::HandleAgreement { proposal, sig } => {
-                self.core.handle_general_agreements(proposal, sig).await
+            Cmd::HandleSectionInfoAgreement { section_auth, sig } => {
+                self.core
+                    .handle_section_info_agreement(section_auth, sig)
+                    .await
             }
             Cmd::HandleNewNodeOnline(node_state) => {
                 Ok(self.core.propose_join_membership(node_state).await)
             }
-            Cmd::HandleNewEldersAgreement { proposal, sig } => match proposal {
-                Proposal::NewElders(section_auth) => {
-                    self.core
-                        .handle_new_elders_agreement(section_auth, sig)
-                        .await
-                }
-                _ => {
-                    error!("Other agreement messages should be handled in `HandleAgreement`, which is non-blocking ");
-                    Ok(vec![])
-                }
-            },
+            Cmd::HandleNewEldersAgreement { signed_sap, sig } => {
+                self.core.handle_new_elders_agreement(signed_sap, sig).await
+            }
             Cmd::HandlePeerLost(peer) => self.core.handle_peer_lost(&peer.addr()).await,
             Cmd::HandleDkgOutcome {
                 section_auth,
