@@ -26,8 +26,8 @@ use sn_interface::{
 
 use bytes::Bytes;
 use itertools::Itertools;
-use tokio::sync::Mutex;
 use std::{cmp::Ordering, collections::BTreeSet, sync::Arc};
+use tokio::sync::Mutex;
 use tracing::info;
 use xor_name::XorName;
 
@@ -90,7 +90,7 @@ impl Node {
         let mut cmds = vec![Cmd::AddToPendingQueries {
             msg_id,
             origin: source_client,
-            send_stream,
+            send_stream: send_stream.clone(),
             operation_id,
             target_adult: target.name(),
         }];
@@ -105,6 +105,7 @@ impl Node {
                     Error::CannotHandleQuery(query),
                     source_client,
                     msg_id,
+                    send_stream,
                     #[cfg(feature = "traceroute")]
                     traceroute,
                 );

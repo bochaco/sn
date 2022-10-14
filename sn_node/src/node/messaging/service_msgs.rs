@@ -46,13 +46,14 @@ impl Node {
         &self,
         target: Peer,
         correlation_id: MsgId,
+        send_stream: Option<Arc<Mutex<SendStream>>>,
         #[cfg(feature = "traceroute")] traceroute: Traceroute,
     ) -> Cmd {
         let the_ack_msg = ServiceMsg::CmdAck { correlation_id };
         self.send_service_msg(
             the_ack_msg,
             Peers::Single(target),
-            None,
+            send_stream,
             #[cfg(feature = "traceroute")]
             traceroute,
         )
@@ -64,6 +65,7 @@ impl Node {
         error: Error,
         target: Peer,
         correlation_id: MsgId,
+        send_stream: Option<Arc<Mutex<SendStream>>>,
         #[cfg(feature = "traceroute")] traceroute: Traceroute,
     ) -> Cmd {
         let the_error_msg = ServiceMsg::CmdError {
@@ -74,7 +76,7 @@ impl Node {
         self.send_service_msg(
             the_error_msg,
             Peers::Single(target),
-            None,
+            send_stream,
             #[cfg(feature = "traceroute")]
             traceroute,
         )
@@ -313,6 +315,7 @@ impl Node {
         cmds.push(self.send_cmd_ack(
             origin,
             msg_id,
+            send_stream,
             #[cfg(feature = "traceroute")]
             traceroute,
         ));

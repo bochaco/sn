@@ -100,8 +100,13 @@ impl Dispatcher {
                 };
 
                 let tasks = peer_msgs.into_iter().map(|(peer, msg)| {
-                    self.comm
-                        .send_out_bytes(peer, msg_id, msg, send_stream.clone(), is_msg_for_client)
+                    self.comm.send_out_bytes(
+                        peer,
+                        msg_id,
+                        msg,
+                        send_stream.clone(),
+                        is_msg_for_client,
+                    )
                 });
                 let results = futures::future::join_all(tasks).await;
 
@@ -189,7 +194,7 @@ impl Dispatcher {
                         msg,
                         auth,
                         origin,
-                        send_stream,
+                        send_stream.clone(),
                         #[cfg(feature = "traceroute")]
                         traceroute.clone(),
                     )
@@ -202,6 +207,7 @@ impl Dispatcher {
                             err,
                             origin,
                             msg_id,
+                            send_stream,
                             #[cfg(feature = "traceroute")]
                             traceroute,
                         );
