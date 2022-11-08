@@ -42,7 +42,7 @@ pub(crate) const NUM_OF_ELDERS_SUBSET_FOR_QUERIES: usize = 3;
 pub(crate) const NODES_TO_CONTACT_PER_STARTUP_BATCH: usize = 3;
 
 // Duration of wait for the node to have chance to pickup network knowledge at the beginning
-const INITIAL_WAIT: Duration = Duration::from_secs(1);
+const INITIAL_WAIT: u64 = 1;
 
 impl Session {
     #[instrument(
@@ -104,20 +104,26 @@ impl Session {
         &self,
         msg_id: MsgId,
         elders: Vec<Peer>,
-        responses: Vec<(Peer, MsgType)>,
+        responses: Vec<(Peer, MsgType)>, // mut resp_rx: mpsc::Receiver<MsgResponse>,
     ) -> Result<()> {
         debug!("----> init of check for acks for {:?}", msg_id);
         let expected_acks = elders.len();
         let mut received_acks = BTreeSet::default();
         let mut received_errors = BTreeSet::default();
 
+<<<<<<< Updated upstream
         for (peer, msg_response) in responses {
             let src = peer.addr();
             match msg_response {
                 MsgType::Client {
                     msg_id,
-                    msg: ClientMsg::CmdResponse { response, .. },
-                    ..
+                    auth: _,
+                    dst: _,
+                    msg:
+                        ClientMsg::CmdResponse {
+                            response,
+                            correlation_id: _,
+                        },
                 } => {
                     match response.result() {
                         Ok(()) => {
@@ -152,6 +158,31 @@ impl Session {
                                 });
                             }
                         }
+=======
+        while let Some(msg_resp) = resp_rx.recv().await {
+            debug!("Handling msg_resp sent to ack wait channel: {msg_resp:?}");
+            let (src, result) = match msg_resp {
+                MsgResponse::CmdResponse(src, response) => (src, response.result().clone()),
+                MsgResponse::QueryResponse(src, resp) => {
+                    debug!("Ignoring unexpected query response received from {src:?} when awaiting a CmdAck: {resp:?}");
+                    continue;
+                }
+                MsgResponse::Failure(src, error) => {
+                    error!("Failure occurred for cmd {msg_id:?}, to Elder at {src:?}: {error:?}",);
+                    continue;
+                }
+            };
+            match result {
+                Ok(()) => {
+                    let preexisting = !received_acks.insert(src) || received_errors.contains(&src);
+                    debug!(
+                        "ACK from {src:?} read from set for msg_id {msg_id:?} - preexisting??: {preexisting:?}",
+                    );
+
+                    if received_acks.len() >= expected_acks {
+                        trace!("Good! We've at or above {expected_acks} expected_acks");
+                        return Ok(());
+>>>>>>> Stashed changes
                     }
                 }
                 _ => {
@@ -257,29 +288,35 @@ impl Session {
         // so we don't need more than one valid response to prevent from accepting invalid responses
         // from byzantine nodes, however for mutable data (non-Chunk responses) we will
         // have to review the approach.
-        self.check_query_responses(msg_id, elders.clone(), chunk_addr, send_responses)
+        self.check_query_responses(send_responses, msg_id, elders.clone(), chunk_addr)
             .await
     }
 
     async fn check_query_responses(
         &self,
+        responses: Vec<(Peer, MsgType)>,
         msg_id: MsgId,
         elders: Vec<Peer>,
         chunk_addr: Option<ChunkAddress>,
-        responses: Vec<(Peer, MsgType)>,
     ) -> Result<QueryResult> {
         let mut discarded_responses: usize = 0;
         let mut error_response = None;
         let mut valid_response = None;
         let elders_len = elders.len();
 
+<<<<<<< Updated upstream
         for (peer, msg) in responses {
             let peer_address = peer.addr();
             match msg {
                 MsgType::Client {
                     msg_id,
-                    msg: ClientMsg::QueryResponse { response, .. },
-                    ..
+                    auth: _,
+                    dst: _,
+                    msg:
+                        ClientMsg::QueryResponse {
+                            response,
+                            correlation_id: _,
+                        },
                 } => {
                     match response {
                         QueryResponse::GetChunk(Ok(chunk)) => {
@@ -313,6 +350,44 @@ impl Session {
                                 &response
                             );
                             error_response = Some(response);
+=======
+        while let Some(msg_resp) = resp_rx.recv().await {
+            let (peer_address, response) = match msg_resp {
+                MsgResponse::QueryResponse(src, resp) => (src, resp),
+                MsgResponse::CmdResponse(ack_src, _error) => {
+                    debug!("Ignoring unexpected CmdAck response received from {ack_src:?} when awaiting a QueryResponse");
+                    continue;
+                }
+                MsgResponse::Failure(src, error) => {
+                    debug!(
+                        "Failure #{discarded_responses} for {msg_id:?} to Elder at {src:?} \
+                        (but may be overridden by a non-failure response from another elder): {:#?}",
+                        &error
+                    );
+                    discarded_responses += 1;
+                    continue;
+                }
+            };
+
+            // lets see if we have a positive response...
+            debug!("response to {msg_id:?}: {:?}", response);
+
+            match *response {
+                QueryResponse::GetChunk(Ok(chunk)) => {
+                    if let Some(chunk_addr) = chunk_addr {
+                        // We are dealing with Chunk query responses, thus we validate its hash
+                        // matches its xorname, if so, we don't need to await for more responses
+                        debug!("Chunk QueryResponse received is: {:#?}", chunk);
+
+                        if chunk_addr.name() == chunk.name() {
+                            trace!("Valid Chunk received for {:?}", msg_id);
+                            valid_response = Some(QueryResponse::GetChunk(Ok(chunk)));
+                            break;
+                        } else {
+                            // the Chunk content doesn't match its XorName,
+                            // this is suspicious and it could be a byzantine node
+                            warn!("We received an invalid Chunk response from one of the nodes");
+>>>>>>> Stashed changes
                             discarded_responses += 1;
                         }
 
@@ -445,7 +520,7 @@ impl Session {
         backoff.reset();
 
         // wait here to give a chance for AE responses to come in and be parsed
-        tokio::time::sleep(INITIAL_WAIT).await;
+        tokio::time::sleep(Duration::from_secs(INITIAL_WAIT)).await;
 
         info!("Client startup... awaiting some network knowledge");
 
@@ -599,14 +674,14 @@ impl Session {
     #[instrument(skip_all, level = "trace")]
     /// All operations to the network return a response, either an ACK or a QueryResult.
     /// This sends a message to one node only
-    pub(super) async fn send_msg_and_await_response<T>(
+    pub(super) async fn send_msg_and_await_response(
         &self,
         peer: Peer,
         peer_index: usize,
         wire_msg: WireMsg,
         msg_id: MsgId,
         force_new_link: bool,
-    ) -> Result<Result<T>> {
+    ) -> Result<MsgType> {
         debug!("---> send msg {msg_id:?} going... will force new?: {force_new_link}");
         let bytes = wire_msg.serialize()?;
 
@@ -668,18 +743,18 @@ impl Session {
             warn!("Issue when sending {msg_id:?} to {peer:?}: {err:?}");
         }
 
-        Ok(result)
+        result
     }
 
     #[instrument(skip_all, level = "trace")]
     /// All operations to the network return a response, either an ACK or a QueryResult
-    pub(super) async fn send_many_msgs_and_await_responses<T>(
+    pub(super) async fn send_many_msgs_and_await_responses(
         &self,
         nodes: Vec<Peer>,
         wire_msg: WireMsg,
         msg_id: MsgId,
         force_new_link: bool,
-    ) -> Result<Vec<(Peer, Result<T>)>> {
+    ) -> Result<Vec<(Peer, MsgType)>> {
         debug!("---> send msg {msg_id:?} going... will force new?: {force_new_link}");
 
         let mut tasks = vec![];
@@ -692,7 +767,7 @@ impl Session {
             let wire_msg = wire_msg.clone();
 
             let task = async move {
-                let result = session
+                let msg = session
                     .send_msg_and_await_response(
                         *peer,
                         peer_index,
@@ -702,7 +777,7 @@ impl Session {
                     )
                     .await;
 
-                (*peer, result)
+                (*peer, msg)
             };
 
             tasks.push(task)
@@ -713,13 +788,14 @@ impl Session {
 
         let mut failures = nodes_len;
         // otherwise we can parse out the inner result now
-        let mut final_results = vec![];
+        let mut final_msgs = vec![];
 
         results.into_iter().for_each(|(peer, result)| match result {
             Err(error) => last_error = Some(error),
-            Ok(result) => {
+            Ok(msg) => {
                 failures -= 1;
-                final_results.push((peer, result));
+
+                final_msgs.push((peer, msg));
             }
         });
 
@@ -735,7 +811,7 @@ impl Session {
             }
         }
 
-        Ok(final_results)
+        Ok(final_msgs)
     }
 
     async fn handle_system_msg(
