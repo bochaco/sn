@@ -116,7 +116,7 @@ impl Safe {
             // Write pointer to files_map onto our register
             let reg_address = self.get_register_address(&reg_url)?;
             let entry = files_map_xorurl.as_bytes().to_vec();
-            let mut client = self.get_safe_client()?;
+            let client = self.get_safe_client()?;
             let (entry_hash, reg_op) = client
                 .write_to_local_register(reg_address, entry, Default::default())
                 .await?;
@@ -626,7 +626,7 @@ impl Safe {
             Client::calculate_address(bytes)?
         } else {
             debug!("Storing {} bytes of data", bytes.len());
-            let mut client = self.get_safe_client()?;
+            let client = self.get_safe_client()?;
             client.upload_and_verify(bytes).await?
         };
         let xorurl = SafeUrl::from_bytes(address, content_type)?.encode(self.xorurl_base);
@@ -666,7 +666,7 @@ impl Safe {
 
     async fn get_bytes(&mut self, address: XorName, range: Range) -> Result<Bytes> {
         debug!("Attempting to fetch data from {:?}", address);
-        let mut client = self.get_safe_client()?;
+        let client = self.get_safe_client()?;
         let data = if let Some((start, end)) = range {
             let start = start.map(|start_index| start_index as usize).unwrap_or(0);
             let len = end

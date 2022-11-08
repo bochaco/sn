@@ -44,7 +44,7 @@ impl Session {
     /// Update our network knowledge making sure proof chain validates the
     /// new SAP based on currently known remote section SAP or genesis key.
     pub(crate) async fn update_network_knowledge(
-        &mut self,
+        &self,
         section_tree_update: SectionTreeUpdate,
         src_peer: Peer,
     ) {
@@ -93,6 +93,9 @@ impl Session {
             } => (msg_id, msg, dst, auth),
             other => {
                 warn!("Unexpected non-ClientMsg returned in AE-Redirect response: {other:?}");
+
+                // FIXME: send MsgResponse::Failure { .. }
+
                 return Ok(None);
             }
         };
@@ -107,6 +110,9 @@ impl Session {
                     "Invalid bounced msg {msg_id:?} received in AE response: {service_msg:?}. Msg is of invalid type"
                 );
                 // Early return with random name as we will discard the msg at the caller func
+
+                // FIXME: send MsgResponse::Failure { .. }
+
                 return Ok(None);
             }
         };
@@ -139,6 +145,9 @@ impl Session {
                 "Final target elders for resending {msg_id:?}: {service_msg:?} msg \
                 are {target_elders:?}"
             );
+
+            // FIXME: send MsgResponse::Failure { .. } so we know why we
+            // would not receive a response on this bi-stream
         }
 
         Ok(Some((msg_id, target_elders, service_msg, dst, auth)))

@@ -142,7 +142,7 @@ impl Safe {
 
     /// Verify if the provided DBC's key_image has been already spent on the network.
     pub async fn is_dbc_spent(&mut self, key_image: KeyImage) -> Result<bool> {
-        let mut client = self.get_safe_client()?;
+        let client = self.get_safe_client()?;
         let spent_proof_shares = client.spent_proof_shares(key_image).await?;
 
         // We obtain a set of unique spent transactions hash the shares belong to
@@ -462,7 +462,7 @@ impl Safe {
             .add_inputs_dbc_bearer(input_dbcs.iter())?
             .add_outputs_by_amount(outputs.into_iter().map(|(token, owner)| (token, owner)));
 
-        let mut client = self.get_safe_client()?;
+        let client = self.get_safe_client()?;
         let change_owneronce =
             OwnerOnce::from_owner_base(client.dbc_owner().clone(), &mut rng::thread_rng());
         if change_amount.as_nano() > 0 {

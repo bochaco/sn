@@ -51,7 +51,7 @@ impl Session {
         name = "session send cmd"
     )]
     pub(crate) async fn send_cmd(
-        &mut self,
+        &self,
         dst_address: XorName,
         auth: ClientAuth,
         payload: Bytes,
@@ -200,7 +200,7 @@ impl Session {
     #[allow(clippy::too_many_arguments)]
     /// Send a `ClientMsg` to the network awaiting for the response.
     pub(crate) async fn send_query(
-        &mut self,
+        &self,
         query: DataQuery,
         auth: ClientAuth,
         payload: Bytes,
@@ -404,7 +404,7 @@ impl Session {
 
     #[instrument(skip_all, level = "debug")]
     pub(crate) async fn make_contact_with_nodes(
-        &mut self,
+        &self,
         nodes: Vec<Peer>,
         section_pk: bls::PublicKey,
         dst_address: XorName,
@@ -610,7 +610,7 @@ impl Session {
     /// All operations to the network return a response, either an ACK or a QueryResult.
     /// This sends a message to one node only
     pub(super) async fn send_msg_and_await_response(
-        &mut self,
+        &self,
         peer: Peer,
         peer_index: usize,
         wire_msg: WireMsg,
@@ -684,7 +684,7 @@ impl Session {
     #[instrument(skip_all, level = "trace")]
     /// All operations to the network return a response, either an ACK or a QueryResult
     pub(super) async fn send_many_msgs_and_await_responses(
-        &mut self,
+        &self,
         nodes: Vec<Peer>,
         wire_msg: WireMsg,
         msg_id: MsgId,
@@ -698,7 +698,7 @@ impl Session {
         let pub_addr = self.endpoint.public_addr();
 
         for (peer_index, peer) in nodes.iter().enumerate() {
-            let mut session = self.clone();
+            let session = self.clone();
             let wire_msg = wire_msg.clone();
 
             let task = async move {
@@ -750,7 +750,7 @@ impl Session {
     }
 
     async fn handle_system_msg(
-        &mut self,
+        &self,
         msg: NodeMsg,
         src_peer: Peer,
         src_peer_index: usize,
@@ -781,7 +781,7 @@ impl Session {
     #[instrument(skip_all, level = "debug")]
     #[async_recursion]
     async fn handle_ae_msg(
-        &mut self,
+        &self,
         section_tree_update: SectionTreeUpdate,
         bounced_msg: UsrMsgBytes,
         src_peer: Peer,

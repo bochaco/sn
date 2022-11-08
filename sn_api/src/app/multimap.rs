@@ -104,7 +104,7 @@ impl Safe {
             return Ok(EntryHash(rand::thread_rng().gen::<[u8; 32]>()));
         }
 
-        let mut client = self.get_safe_client()?;
+        let client = self.get_safe_client()?;
 
         let (entry_hash, op_batch) = client
             .write_to_local_register(address, data, replace)
@@ -141,7 +141,7 @@ impl Safe {
             return Ok(EntryHash(rand::thread_rng().gen::<[u8; 32]>()));
         }
 
-        let mut client = self.get_safe_client()?;
+        let client = self.get_safe_client()?;
 
         let (entry_hash, op_batch) = client
             .write_to_local_register(address, MULTIMAP_REMOVED_MARK.to_vec(), to_remove)

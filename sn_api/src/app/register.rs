@@ -51,7 +51,7 @@ impl Safe {
         }
 
         // The Register's owner will be the client's public key
-        let mut client = self.get_safe_client()?;
+        let client = self.get_safe_client()?;
         let owner = User::Key(client.public_key());
 
         // Store the Register on the network
@@ -105,7 +105,7 @@ impl Safe {
             None => {
                 debug!("No version so take latest entry from Register at: {}", url);
                 let address = self.get_register_address(url)?;
-                let mut client = self.get_safe_client()?;
+                let client = self.get_safe_client()?;
                 match client.read_register(address).await {
                     Ok(entry) => Ok(entry),
                     Err(ClientError::NetworkDataError(SafeNdError::NoSuchEntry(_))) => Err(
@@ -152,7 +152,7 @@ impl Safe {
         // TODO: allow to specify the hash with the SafeUrl as well: safeurl.content_hash(),
         // e.g. safe://mysafeurl#ce56a3504c8f27bfeb13bdf9051c2e91409230ea
         let address = self.get_register_address(url)?;
-        let mut client = self.get_safe_client()?;
+        let client = self.get_safe_client()?;
         client
             .get_register_entry(address, hash)
             .await
@@ -186,7 +186,7 @@ impl Safe {
             return Ok(EntryHash(rand::thread_rng().gen::<[u8; 32]>()));
         }
 
-        let mut client = self.get_safe_client()?;
+        let client = self.get_safe_client()?;
         let (entry_hash, op_batch) = match client
             .write_to_local_register(address, entry, parents)
             .await

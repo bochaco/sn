@@ -42,7 +42,7 @@ impl Client {
     /// that the section can use to update itself.
     #[instrument(skip(self, tx, spent_proofs, spent_transactions), level = "debug")]
     pub async fn spend_dbc(
-        &mut self,
+        &self,
         key_image: KeyImage,
         tx: RingCtTransaction,
         spent_proofs: BTreeSet<SpentProof>,
@@ -107,7 +107,7 @@ impl Client {
     /// Return the set of spent proof shares if the provided DBC's key image is spent
     #[instrument(skip(self), level = "debug")]
     pub async fn spent_proof_shares(
-        &mut self,
+        &self,
         key_image: KeyImage,
     ) -> Result<Vec<SpentProofShare>, Error> {
         let address = SpentbookAddress::new(XorName::from_content(&key_image.to_bytes()));
