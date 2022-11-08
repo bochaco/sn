@@ -8,7 +8,7 @@ use sn_interface::{
     data_copy_count,
     messaging::{
         data::{ClientMsg, DataQuery, DataQueryVariant, QueryResponse},
-        MsgId, WireMsg,
+        WireMsg,
     },
     types::{Chunk, ChunkAddress},
 };
@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
     // Initialize
 
     let (args, bytes) = init()?;
-    let client = Client::builder().build().await?;
+    let mut client = Client::builder().build().await?;
 
     // Print out chunk information of file
 
@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
         );
 
         for i in 0..=args.up_to_adult {
-            let query_fut = query_chunk(&client, i, chunk.address().0);
+            let query_fut = query_chunk(&mut client, i, chunk.address().0);
             let res = match timeout(Duration::from_secs(10), query_fut).await {
                 Ok(res) => res,
                 Err(_) => {
@@ -109,7 +109,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn query_chunk(client: &Client, adult_index: usize, address: XorName) -> Result<Chunk> {
+async fn query_chunk(client: &mut Client, adult_index: usize, address: XorName) -> Result<Chunk> {
     let variant = DataQueryVariant::GetChunk(ChunkAddress(address));
     let query = DataQuery {
         adult_index,
@@ -126,18 +126,17 @@ async fn query_chunk(client: &Client, adult_index: usize, address: XorName) -> R
     }
 }
 
-async fn send_query(client: &Client, query: DataQuery) -> Result<QueryResponse> {
+async fn send_query(client: &mut Client, query: DataQuery) -> Result<QueryResponse> {
     let client_pk = client.public_key();
     let msg = ClientMsg::Query(query.clone());
     let serialised_query = WireMsg::serialize_msg_payload(&msg)?;
     let signature = client.keypair().sign(&serialised_query);
-    let msg_id = MsgId::new();
+
     Ok(client
         .send_signed_query(
             query,
             client_pk,
             serialised_query.clone(),
-            msg_id,
             signature.clone(),
         )
         .await?
